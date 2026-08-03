@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Knowledge Assistant</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app-shell" aria-label="AI Knowledge Assistant chat page">
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+    <div class="grid-overlay"></div>
+    <div class="particle-field" aria-hidden="true">
+      <span></span><span></span><span></span><span></span><span></span>
+      <span></span><span></span><span></span><span></span><span></span>
+    </div>
+
+    <section class="hero-copy">
+      <p class="eyebrow">RAG + LLM + AI Agent Systems</p>
+      <h1>AI Knowledge Assistant</h1>
+      <p class="subtitle">RAG Chatbot and AI Agent Development</p>
+      <div class="badges" aria-label="Technology badges">
+        <span>GPT</span>
+        <span>LangChain</span>
+        <span>LlamaIndex</span>
+        <span>OpenAI</span>
+      </div>
+    </section>
+
+    <section class="workflow" aria-label="AI workflow from documents and database to chatbot answer">
+      <div class="node pdf-node">
+        <div class="pdf-icon" aria-hidden="true">
+          <div class="doc-fold"></div>
+          <div class="pdf-label">PDF</div>
+          <div class="doc-lines">
+            <i></i><i></i><i></i>
+          </div>
+        </div>
+        <div>
+          <strong>PDF Documents</strong>
+          <small>Business files</small>
+        </div>
+      </div>
+
+      <div class="node db-node">
+        <div class="database-icon" aria-hidden="true">
+          <div class="db-top"></div>
+          <div class="db-body">
+            <i></i><i></i>
+          </div>
+          <div class="db-bottom"></div>
+        </div>
+        <div>
+          <strong>Vector Database</strong>
+          <small>Company knowledge</small>
+        </div>
+      </div>
+
+      <div class="connection pdf-to-brain" aria-hidden="true"></div>
+      <div class="connection db-to-brain" aria-hidden="true"></div>
+      <div class="connection brain-to-chat" aria-hidden="true"></div>
+
+      <div class="brain-stage" aria-label="AI Brain">
+        <div class="brain-halo"></div>
+        <svg class="brain-icon" viewBox="0 0 240 240" role="img" aria-label="Glowing AI brain icon">
+          <defs>
+            <linearGradient id="brainGradient" x1="25%" y1="20%" x2="80%" y2="85%">
+              <stop offset="0%" stop-color="#e5fbff"/>
+              <stop offset="42%" stop-color="#38d5ff"/>
+              <stop offset="100%" stop-color="#6479ff"/>
+            </linearGradient>
+            <filter id="brainGlow">
+              <feGaussianBlur stdDeviation="4" result="blur"/>
+              <feMerge>
+                <feMergeNode in="blur"/>
+                <feMergeNode in="SourceGraphic"/>
+              </feMerge>
+            </filter>
+          </defs>
+          <path class="brain-outline" d="M78 73c-18 0-32 13-32 30 0 5 1 10 4 14-12 6-20 18-20 32 0 19 15 35 34 35h105c22 0 40-18 40-40 0-17-11-32-27-38 1-4 2-8 2-12 0-20-16-36-36-36-9 0-18 4-24 10-7-13-20-21-36-21-4 0-8 1-12 2-6-8-16-13-28-13-17 0-31 12-34 28 4-1 9-1 14-1z" fill="rgba(9, 20, 45, 0.88)" stroke="url(#brainGradient)" stroke-width="5" filter="url(#brainGlow)"/>
+          <path d="M82 92c16 0 26 9 27 22M68 122c18-4 33 2 42 17M82 162c11-13 24-18 40-13M126 82c7 13 8 27 2 41M138 132c18-11 36-10 52 2M143 166c7-15 19-24 35-26M101 112h37M98 144h46M138 101h28" fill="none" stroke="#b8f5ff" stroke-width="5" stroke-linecap="round"/>
+          <circle cx="101" cy="112" r="6" fill="#64f4ff"/>
+          <circle cx="138" cy="101" r="6" fill="#64f4ff"/>
+          <circle cx="144" cy="144" r="6" fill="#64f4ff"/>
+          <circle cx="178" cy="140" r="6" fill="#64f4ff"/>
+          <circle cx="120" cy="151" r="5" fill="#9ea7ff"/>
+        </svg>
+        <div class="brain-label">
+          <strong>AI Brain</strong>
+          <small>Retrieval + reasoning</small>
+        </div>
+      </div>
+
+      <div class="chat-window" aria-label="Chat assistant">
+        <div class="chat-topbar">
+          <span></span><span></span><span></span>
+          <strong>Chat Assistant</strong>
+        </div>
+        <div class="chat-body" id="chat-log" aria-live="polite">
+          <div class="message user">
+            <small>User</small>
+            <p>"What is our refund policy?"</p>
+          </div>
+          <div class="message ai">
+            <small>AI</small>
+            <p>"Based on your documents, refunds are available within 30 days."</p>
+          </div>
+        </div>
+        <form class="chat-form" id="chat-form" data-endpoint="/chat">
+          <label for="question">Ask your knowledge base</label>
+          <div class="input-row">
+            <input id="question" name="question" type="text" autocomplete="off" placeholder="Ask about a policy, process, or document..." required>
+            <button type="submit">Ask AI</button>
+          </div>
+          <p class="form-status" id="form-status">Connected to /chat</p>
+        </form>
+      </div>
+    </section>
+  </main>
+  <script>
+    const form = document.querySelector("#chat-form");
+    const input = document.querySelector("#question");
+    const chatLog = document.querySelector("#chat-log");
+    const statusText = document.querySelector("#form-status");
+    const submitButton = form.querySelector("button");
+
+    function appendMessage(role, text, sources = []) {
+      const message = document.createElement("div");
+      message.className = `message ${role}`;
+
+      const label = document.createElement("small");
+      label.textContent = role === "user" ? "User" : "AI";
+
+      const body = document.createElement("p");
+      body.textContent = text;
+
+      message.append(label, body);
+
+      if (sources.length > 0) {
+        const sourceList = document.createElement("ul");
+        sourceList.className = "sources";
+        for (const source of sources.slice(0, 3)) {
+          const item = document.createElement("li");
+          item.textContent = source.page_number
+            ? `${source.file_name}, page ${source.page_number}`
+            : source.file_name;
+          sourceList.appendChild(item);
+        }
+        message.appendChild(sourceList);
+      }
+
+      chatLog.appendChild(message);
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const question = input.value.trim();
+      if (!question) {
+        return;
+      }
+
+      appendMessage("user", `"${question}"`);
+      input.value = "";
+      input.disabled = true;
+      submitButton.disabled = true;
+      statusText.textContent = "Searching documents...";
+
+      try {
+        const response = await fetch(form.dataset.endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question }),
+        });
+
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
+          throw new Error(error.detail || `Request failed with status ${response.status}`);
+        }
+
+        const result = await response.json();
+        appendMessage("ai", result.answer || "No answer returned.", result.sources || []);
+        statusText.textContent = "Ready";
+      } catch (error) {
+        appendMessage("ai", `I could not reach /chat: ${error.message}`);
+        statusText.textContent = "Check API, auth, or vector store";
+      } finally {
+        input.disabled = false;
+        submitButton.disabled = false;
+        input.focus();
+      }
+    });
+  </script>
+</body>
+</html>
