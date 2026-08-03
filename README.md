@@ -1,4 +1,4 @@
-# RagAIKnowledgeAssistant
+# rag-ai-knowledge-assistant
 
 FastAPI service for asking questions over documents stored in Google Drive. It ingests supported Drive files, chunks and embeds their text with OpenAI embeddings, stores vectors in a local Chroma database, and answers questions with source citations.
 
@@ -180,7 +180,7 @@ curl -u "$API_BASIC_AUTH_USERNAME:$API_BASIC_AUTH_PASSWORD" \
 Build the image:
 
 ```bash
-docker build -t google-drive-rag-openai .
+docker build -t rag-ai-knowledge-assistant .
 ```
 
 Run the API:
@@ -191,7 +191,7 @@ docker run --rm -p 8000:8000 \
   -v "$PWD/data:/app/data" \
   -v "$PWD/credentials.json:/app/credentials.json:ro" \
   -v "$PWD/token.json:/app/token.json" \
-  google-drive-rag-openai
+  rag-ai-knowledge-assistant
 ```
 
 Because this project uses an installed-app OAuth browser flow, run `python scripts/ingest_drive.py` locally first to generate `token.json` before running ingestion inside Docker.
@@ -204,7 +204,7 @@ docker run --rm \
   -v "$PWD/data:/app/data" \
   -v "$PWD/credentials.json:/app/credentials.json:ro" \
   -v "$PWD/token.json:/app/token.json" \
-  google-drive-rag-openai \
+  rag-ai-knowledge-assistant \
   python scripts/ingest_drive.py
 ```
 
