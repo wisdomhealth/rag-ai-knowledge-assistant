@@ -1,22 +1,22 @@
-# 知库 · Google Drive 文档问答
+# Zhiku · Google Drive Document Q&A
 
-基于 FastAPI 的中文网页聊天与 RAG API。只有一条组合式流程：
+A Chinese web chat interface and RAG API built with FastAPI. The application has one combined pipeline:
 
 ```text
-Google Drive → 按页解析 → LlamaIndex Document / SentenceSplitter
+Google Drive → page-aware parsing → LlamaIndex Document / SentenceSplitter
              → LlamaIndex OpenAIEmbedding → ChromaVectorStore → Chroma
 
-问题 + 服务端历史 → LangChain 必要的独立问题改写
-                 → LlamaIndex aretrieve（一次问题向量化、一次检索）
-                 → NodeWithScore → LangChain Document → 编号上下文
-                 → LangChain ChatPromptTemplate / ChatOpenAI → 答案 + 来源
+Question + server-side history → LangChain standalone-question rewrite when needed
+                               → LlamaIndex aretrieve (one question embedding, one retrieval)
+                               → NodeWithScore → LangChain Document → numbered context
+                               → LangChain ChatPromptTemplate / ChatOpenAI → answer + sources
 ```
 
-LlamaIndex 负责节点、分块、Embedding、向量索引和异步检索；不使用 QueryEngine 生成答案。LangChain 负责消息、追问改写、提示词和普通/流式生成；没有第二套检索器。FastAPI 负责接口、认证、会话与静态网页。没有 Agent、LangGraph 或可切换的多套 RAG 后端。
+LlamaIndex handles nodes, chunking, embeddings, the vector index, and asynchronous retrieval; QueryEngine is not used to generate answers. LangChain handles messages, follow-up question rewriting, prompts, and standard/streaming generation; there is no second retriever. FastAPI handles endpoints, authentication, sessions, and the static web interface. The application has no Agent, LangGraph, or switchable RAG backends.
 
-## 安装与配置
+## Installation and Configuration
 
-使用 Python **3.12** 或兼容的新版本（锁定依赖要求最低 3.12）。本次在 Python 3.12.11 验证。运行：
+Use Python **3.12** or a compatible newer version (the locked dependencies require at least 3.12). This project was verified with Python 3.12.11. Run:
 
 ```bash
 python3.12 -m venv .venv
@@ -25,117 +25,117 @@ pip install -r requirements.txt -c requirements.lock
 cp .env.example .env
 ```
 
-`requirements.txt` 锁定直接依赖；`requirements.lock` 锁定实际测试环境的传递依赖。核心版本：langchain-core 0.3.86、langchain-openai 0.3.35、llama-index-core 0.12.52、llama-index-embeddings-openai 0.3.1、llama-index-vector-stores-chroma 0.4.2、chromadb 1.5.9。只安装需要的框架组件；LlamaIndex 的 workflows 是传递依赖，应用没有调用工作流或 Agent。
+`requirements.txt` pins direct dependencies; `requirements.lock` pins the transitive dependencies from the verified environment. Core versions include langchain-core 0.3.86, langchain-openai 0.3.35, llama-index-core 0.12.52, llama-index-embeddings-openai 0.3.1, llama-index-vector-stores-chroma 0.4.2, and chromadb 1.5.9. Only the required framework components are installed. LlamaIndex workflows is a transitive dependency, but the application does not use workflows or Agents.
 
-`.env` 中配置 `OPENAI_API_KEY`、`GOOGLE_DRIVE_FOLDER_ID`（多个文件夹用逗号分隔）。保留现有 `.env` 时，手动加入新配置，不要覆盖凭证。
+Set `OPENAI_API_KEY` and `GOOGLE_DRIVE_FOLDER_ID` in `.env` (use a comma-separated list for multiple folders). When retaining an existing `.env`, add new settings manually instead of overwriting credentials.
 
-| 配置 | 默认值 / 含义 |
+| Setting | Default / Description |
 |---|---|
 | OPENAI_CHAT_MODEL | gpt-4o-mini |
 | OPENAI_EMBEDDING_MODEL | text-embedding-3-small |
-| OPENAI_EMBEDDING_DIMENSIONS | 1536；导入和检索必须一致 |
-| VECTOR_STORE_DIR | data/chroma_v2；新目录避免打开生产旧库 |
-| CHROMA_COLLECTION | google_drive_llama_v1；首次迁移使用新集合 |
-| CHUNK_SIZE / CHUNK_OVERLAP | 768 / 100，按 tokenizer token 计数 |
+| OPENAI_EMBEDDING_DIMENSIONS | 1536; ingestion and retrieval must match |
+| VECTOR_STORE_DIR | data/chroma_v2; a new directory avoids opening the old production database |
+| CHROMA_COLLECTION | google_drive_llama_v1; use a new collection for the initial migration |
+| CHUNK_SIZE / CHUNK_OVERLAP | 768 / 100, counted in tokenizer tokens |
 | EMBEDDING_BATCH_SIZE | 64 |
 | RETRIEVAL_TOP_K | 5 |
-| CONTEXT_MAX_CHARS | 16000，检索上下文字符预算 |
-| HISTORY_MAX_TURNS / HISTORY_MAX_CHARS | 6 / 8000；只取有限完整历史轮次 |
-| REQUEST_TIMEOUT | 90 秒，覆盖问题改写、检索、生成 |
+| CONTEXT_MAX_CHARS | 16000, the retrieved-context character budget |
+| HISTORY_MAX_TURNS / HISTORY_MAX_CHARS | 6 / 8000; retains a limited number of complete history turns |
+| REQUEST_TIMEOUT | 90 seconds, covering question rewriting, retrieval, and generation |
 | MAX_OUTPUT_TOKENS | 2000 |
 | SESSION_DB | data/sessions.sqlite3 |
-| SESSION_TTL_SECONDS | 604800，浏览器 Cookie 身份有效期 |
-| COOKIE_SECURE | false，本地 HTTP；HTTPS 部署应设 true |
-| API_BASIC_AUTH_USERNAME / PASSWORD | 均为空时不启用 Basic Auth；必须同时配置 |
+| SESSION_TTL_SECONDS | 604800, browser cookie identity lifetime |
+| COOKIE_SECURE | false for local HTTP; set to true for HTTPS deployments |
+| API_BASIC_AUTH_USERNAME / PASSWORD | Basic Auth is disabled when both are empty; both must be configured together |
 
-旧 `CHUNK_MIN_TOKENS`、`CHUNK_MAX_TOKENS`、`CHUNK_OVERLAP_TOKENS` 已删除，改用上表新名称。首次分块可能下载 tiktoken 的 cl100k_base 编码表；不会调用模型或产生模型费用。离线环境先缓存编码表；不使用会导致跨环境分块漂移的静默 fallback。
+The old `CHUNK_MIN_TOKENS`, `CHUNK_MAX_TOKENS`, and `CHUNK_OVERLAP_TOKENS` settings were removed and replaced by the names above. Initial chunking may download tiktoken's cl100k_base encoding table; this does not call a model or incur model charges. Cache the encoding table before running offline. There is no silent fallback tokenizer because that would cause chunk boundaries to drift across environments.
 
-## Google Drive 认证和导入
+## Google Drive Authentication and Ingestion
 
-1. 在 Google Cloud 项目启用 Drive API，配置 OAuth 同意屏幕和 **Desktop app** OAuth 客户端。
-2. 将客户端文件保存为 `credentials.json`，或者设置 `GOOGLE_OAUTH_CREDENTIALS_FILE`。
-3. 设置 `GOOGLE_DRIVE_FOLDER_ID`；登录账号必须能读取对应文件夹。
-4. 首次导入在本机浏览器完成只读授权，令牌保存在 `token.json`，可通过 `GOOGLE_OAUTH_TOKEN_FILE` 改路径。后续复用并刷新。
+1. Enable the Drive API in a Google Cloud project, configure the OAuth consent screen, and create a **Desktop app** OAuth client.
+2. Save the client file as `credentials.json`, or set `GOOGLE_OAUTH_CREDENTIALS_FILE`.
+3. Set `GOOGLE_DRIVE_FOLDER_ID`; the signed-in account must be able to read the configured folders.
+4. Complete the read-only authorization flow in a local browser during the first ingestion. The token is stored in `token.json`; change its path with `GOOGLE_OAUTH_TOKEN_FILE`. Later runs reuse and refresh it.
 
-`app/services/drive_auth.py` 存在，脚本直接导入 `get_drive_service`。支持 PDF、DOCX、TXT，分页读取文件列表，支持共享云端硬盘。PDF 按物理页保留页码；DOCX/TXT 页码为 null。扫描 PDF 不含可提取文本时不生成节点；目前不做 OCR、Google Docs 原生格式导出、子文件夹递归或云端删除同步。
+`app/services/drive_auth.py` is present, and the script imports `get_drive_service` directly. PDF, DOCX, and TXT files are supported, file listings are paginated, and shared drives are supported. PDFs retain physical page numbers; DOCX/TXT page numbers are null. Scanned PDFs without extractable text do not produce nodes. OCR, native Google Docs export, recursive subfolder traversal, and cloud deletion synchronization are not currently implemented.
 
-**首次迁移需要重新分块与向量化，可能产生 OpenAI API 费用。** 脚本必须显式传入费用确认参数；本次开发没有运行真实导入。
+**The initial migration requires re-chunking and re-embedding and may incur OpenAI API charges.** The script requires an explicit cost-confirmation argument. No real ingestion was run during development.
 
 ```bash
 python scripts/ingest_drive.py --help
-# 审核 .env 的新目录、新集合及费用后才执行：
+# Run only after reviewing the new directory, collection, and cost settings in .env:
 python scripts/ingest_drive.py --confirm-cost
 ```
 
-每页创建 LlamaIndex Document，使用 SentenceSplitter。节点保存 `chunk_id`、`file_id`、`file_name`、`source_link`、`page_number`、`chunk_index`、`content_hash`、`chunk_version` 和完整文件版本 `version`。Chroma 内部使用 0 表示未知页码，API 转回 null。
+Each page creates a LlamaIndex Document and is split with SentenceSplitter. Nodes store `chunk_id`, `file_id`, `file_name`, `source_link`, `page_number`, `chunk_index`, `content_hash`, `chunk_version`, and the complete file `version`. Chroma stores 0 for an unknown page number; the API converts it back to null.
 
-稳定 ID 包含文件身份、完整文件内容与来源元数据、分块版本/参数和位置。相同输入重复导入不新增节点、不重复向量化。文件内容、来源元数据或分块参数变更会生成新版本，整份文件需要重新向量化。
+Stable IDs include the file identity, complete file content and source metadata, chunk version/parameters, and position. Re-ingesting identical input does not add nodes or repeat embedding. Changes to file content, source metadata, or chunk parameters create a new version and require the entire file to be embedded again.
 
-### 文件更新与失败恢复
+### File Updates and Failure Recovery
 
-再次执行同一导入命令即可。先写入新版本全部节点并核对 ID，再通过 `versions.sqlite3` 的事务发布该文件新版本。检索通过 LlamaIndex metadata filter 只查询已发布版本。失败时旧版本保持有效；部分暂存节点不参与检索，下次可补齐。旧版本停用但保留磁盘数据，本次没有自动物理清理功能，不会误删其他文件。
+Run the same ingestion command again. The application first writes every node for the new version and verifies the IDs, then publishes the file version transactionally through `versions.sqlite3`. Retrieval uses a LlamaIndex metadata filter to query only published versions. If ingestion fails, the old version remains active; partially staged nodes are excluded from retrieval and can be completed on the next run. Old versions are deactivated but remain on disk. This version does not automatically delete their physical data and does not remove unrelated files.
 
-本地文件锁保证多个导入进程串行写入，读取不等锁；已开始的请求使用其读取时的版本快照。发布后的新请求只看到新版本。备份/恢复应把整个 Chroma 目录（包括 `versions.sqlite3`）一起处理，不能单独丢弃版本清单。文件解析失败或没有文本时保持旧版本，不把空结果当作删除指令。无需在合并到 master 后重复删除旧代码：必要删除已包含在开发分支提交中。
+A local file lock serializes concurrent ingestion processes; reads do not wait for the lock, and in-flight requests use the version snapshot from when they began. New requests see only the newly published version. Backup and restore the entire Chroma directory, including `versions.sqlite3`; do not discard the version manifest separately. If file parsing fails or yields no text, the old version stays active and the empty result is not treated as a deletion instruction. There is no need to delete old code again after merging into master: all required deletions are already included in the development branch commits.
 
-### 新集合切换与旧集合回退
+### Switching to the New Collection and Rolling Back
 
-首次默认使用 `data/chroma_v2` / `google_drive_llama_v1`，保留原 `data/chroma` / `google_drive_docs`。也可在单独测试副本里指定其他新集合名。不要将新导入指向旧集合。
+The initial migration defaults to `data/chroma_v2` / `google_drive_llama_v1` while preserving the original `data/chroma` / `google_drive_docs`. You may also use another new collection name in a separate test copy. Do not direct new ingestion into the old collection.
 
-旧集合可通过同一组合流程查询：停止服务，先备份旧目录（建议复制到回退目录，避免新 Chroma 版本打开旧数据时升级格式），将 `VECTOR_STORE_DIR` 指向副本、`CHROMA_COLLECTION=google_drive_docs`，设置旧库实际使用的 Embedding 模型/维度后重启。旧 schema 适配由 LlamaIndex ChromaVectorStore 提供；旧集合没有可靠的模型元数据，必须人工确认配置。导入程序拒绝写入旧 schema 集合。
+The same combined pipeline can query the old collection. Stop the service, back up the old directory first (copying it to a rollback directory is recommended so a newer Chroma version cannot upgrade the original data format), point `VECTOR_STORE_DIR` to the copy, set `CHROMA_COLLECTION=google_drive_docs`, configure the embedding model and dimensions actually used by the old database, and restart. LlamaIndex ChromaVectorStore provides the old-schema adapter. The old collection does not contain reliable model metadata, so its configuration must be confirmed manually. The ingestion program refuses to write to old-schema collections.
 
-回退旧代码时也应使用原备份目录与原版本依赖；本次不删除原代码备份分支。切回新集合只需恢复新目录/集合配置后重启。不要将旧集合当作新 schema 声明或自行修改集合元数据。
+When rolling back the code, also use the original backup directory and dependency versions. This work does not delete the original code backup branch. To return to the new collection, restore the new directory/collection settings and restart. Do not declare the old collection as the new schema or manually modify collection metadata.
 
-## 启动和网页
+## Running the Service and Web Interface
 
 ```bash
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-打开 [聊天页面](http://127.0.0.1:8000/)，可流式聊天、追问、查看引用来源、新建对话和停止生成。Enter 发送，Shift+Enter 换行。页面支持手机布局，使用纯 HTML/CSS/JavaScript，文本通过 `textContent` 渲染，不执行模型 HTML；原文链接仅接受 http/https。
+Open the [chat page](http://127.0.0.1:8000/) to stream responses, ask follow-up questions, inspect cited sources, create conversations, and stop generation. Press Enter to send and Shift+Enter for a new line. The responsive interface uses plain HTML/CSS/JavaScript. Text is rendered through `textContent`, so model-generated HTML is never executed; source links accept only http/https URLs.
 
-配置 Basic Auth 后，浏览器访问首页会触发原生登录框，后续调用同源 API。API Key、Google 凭证和令牌不传到前端。未启用 Basic Auth 时，只适合本机/可信网络：访客可查询知识库，但每个浏览器获得服务端生成、登记、到期校验的 HttpOnly/SameSite Cookie，不能凭其他人的 conversation_id 读取历史。启用 Basic Auth 后会话绑定认证用户名。同一用户名代表同一用户。未配置模型密钥时首页与健康检查仍可访问，聊天返回明确 503。
+After Basic Auth is configured, opening the home page triggers the browser's native login dialog, and later requests call same-origin APIs. API keys, Google credentials, and tokens are never sent to the frontend. Without Basic Auth, the service is suitable only for a local or trusted network: visitors can query the knowledge base, but every browser receives a server-generated, registered, expiring HttpOnly/SameSite cookie and cannot read another user's history using only their conversation_id. With Basic Auth enabled, sessions are bound to the authenticated username; one username represents one user. If the model key is not configured, the home page and health check remain available, while chat requests return a clear 503 response.
 
-会话和成功轮次持久化在 SQLite；服务重启后保留。当前网页不自动恢复上次打开的对话，可通过 API 获取指定会话近期历史。Cookie 到期后匿名用户无法访问原身份的历史。历史仅用于问题理解，生成业务结论必须依赖本次检索资料。同一会话并发请求返回 409，避免交错历史；不同会话可并行。
+Sessions and successful turns are persisted in SQLite and survive service restarts. The current web interface does not automatically reopen the last conversation, but the API can retrieve recent history for a specified session. After the cookie expires, an anonymous user can no longer access history belonging to the previous identity. History is used only to understand questions; business conclusions must be generated from documents retrieved for the current request. Concurrent requests within the same session return 409 to prevent interleaved history, while different sessions can run concurrently.
 
-## API 与流协议
+## API and Streaming Protocol
 
-旧请求仍可仅发送 `question`：
+Legacy requests may continue to send only `question`:
 
 ```bash
 curl -c /tmp/rag-cookie.txt -b /tmp/rag-cookie.txt \
   -H 'Content-Type: application/json' \
-  -d '{"question":"申请需要哪些材料？"}' http://127.0.0.1:8000/chat
+  -d '{"question":"What documents are required for the application?"}' http://127.0.0.1:8000/chat
 ```
 
-启用认证时增加 `-u '用户名:密码'`，不要将真实密码写进共享脚本或版本库。续聊时将响应中的 `conversation_id` 放入请求；匿名调用需保留 Cookie。
+When authentication is enabled, add `-u 'username:password'`; never put real passwords in shared scripts or source control. For follow-up requests, send the `conversation_id` from the response. Anonymous clients must preserve the cookie.
 
-- `POST /conversations`：创建并返回 conversation_id。
-- `GET /conversations/{id}`：当前用户可见的有限近期成功轮次。
-- `POST /chat`：answer、conversation_id、request_id、sources、latency_ms，以及可获取的 usage 和分阶段耗时。
-- `POST /chat/stream`：SSE 流。
-- `GET /health`：进程存活及模型是否配置，**不表示**远程 API/知识库端到端可用。
+- `POST /conversations`: creates and returns a conversation_id.
+- `GET /conversations/{id}`: returns a limited number of recent successful turns visible to the current user.
+- `POST /chat`: returns answer, conversation_id, request_id, sources, latency_ms, available usage data, and per-stage timing.
+- `POST /chat/stream`: returns an SSE stream.
+- `GET /health`: reports process liveness and whether the model is configured; it does **not** prove end-to-end availability of the remote API or knowledge base.
 
-每个来源包含 `citation_id`、`chunk_id`、`file_name`、`file_id`、`source_link`、`page_number`、`snippet`。来源编号从 1 开始；snippet 取实际提供给模型的片段预览，最多 500 字符。
+Each source contains `citation_id`, `chunk_id`, `file_name`, `file_id`, `source_link`, `page_number`, and `snippet`. Source numbering starts at 1. The snippet previews the actual passage supplied to the model and is limited to 500 characters.
 
-SSE 保留旧 `{"token":"..."}` 与成功结束的 `[DONE]`，新增消息忽略未知字段即可兼容：
+SSE preserves the legacy `{"token":"..."}` payload and the `[DONE]` marker on successful completion. Clients remain compatible by ignoring unknown fields in the new messages:
 
 ```text
 data: {"type":"start","conversation_id":"...","request_id":"...","validated":false}
 
 data: {"type":"sources","sources":[...],"validated":false}
 
-data: {"token":"需要身份证。","validated":false}
+data: {"token":"An ID card is required.","validated":false}
 
-data: {"type":"complete","answer":"需要身份证。[1]","sources":[...],"validated":true,"latency_ms":321,...}
+data: {"type":"complete","answer":"An ID card is required. [1]","sources":[...],"validated":true,"latency_ms":321,...}
 
 data: [DONE]
 ```
 
-错误使用 `event: error` 和 JSON `type/error code/detail/request_id/validated:false`，不发送 complete 或 `[DONE]`。普通接口以 HTTP 状态及 detail.code/message/request_id 返回。有效引用检查要求至少一个 `[数字]`，且每个编号都在本次来源中；它只检查引用格式/范围，**不证明事实正确或引用支持结论**。资料不足时模型应说明缺失并引用已检查的相关资料。
+Errors use `event: error` and a JSON payload containing `type`, error `code`, `detail`, `request_id`, and `validated:false`; they do not send `complete` or `[DONE]`. Standard endpoints return an HTTP status and `detail.code/message/request_id`. A valid citation requires at least one `[number]`, and every number must identify a source from the current request. This validates only citation format and range; it **does not prove factual accuracy or that a citation supports the conclusion**. When the available material is insufficient, the model should identify what is missing and cite the relevant material it inspected.
 
-空知识库/缺密钥返回 503；无权限或不存在的会话返回 404；会话忙返回 409；超时 504；限流 429；引用错误或上游异常 502。流响应已开始后通过 SSE 报错。流式文字在 complete 前都是待验证内容，页面明确标记错误/中断。取消会关闭异步生成流并尽可能取消上游；失败和未完成回复不写入成功历史。同步 Chroma 查询和数据库操作移出 FastAPI 事件循环；已经在线程执行的本地操作不能被强行中止。
+An empty knowledge base or missing model key returns 503; inaccessible or nonexistent sessions return 404; busy sessions return 409; timeouts return 504; rate limits return 429; citation errors and upstream failures return 502. After a streaming response has started, errors are reported through SSE. Streamed text remains unvalidated until the `complete` event, and the web interface clearly marks errors and interruptions. Cancellation closes the asynchronous generation stream and attempts to cancel upstream work; failed and incomplete responses are not stored in successful history. Synchronous Chroma queries and database operations run outside the FastAPI event loop; local work already running in a thread cannot be forcibly stopped.
 
-日志记录 request_id、检索/生成/改写/总耗时、错误类型，模型可返回的 Token 用量直接记录，否则 null。失败时没有完成的阶段指标可为 null。默认不记录完整提示词、文档正文或密钥，不启用 LangSmith tracing。反向代理须关闭 SSE 缓冲，转发正确的同源 host/scheme；跨站写入请求被拒绝。
+Logs record request_id, retrieval/generation/rewrite/total duration, error type, and token usage when the model provides it; otherwise usage is null. Incomplete stage metrics may be null on failure. Complete prompts, document text, and secrets are not logged by default, and LangSmith tracing is disabled. Reverse proxies must disable SSE buffering and forward the correct same-origin host/scheme; cross-site write requests are rejected.
 
 ## Docker
 
@@ -145,7 +145,7 @@ docker run --rm -p 8000:8000 --env-file .env \
   -v "$PWD/data:/app/data" rag-ai-knowledge-assistant
 ```
 
-`.dockerignore` 排除 `.env`、Google 凭证、令牌、知识库及本地输出，不将其复制进镜像。API 容器查询已导入的向量时无需挂载 Google 凭证。导入应先在本机完成 OAuth，之后单独挂载令牌和客户端文件：
+`.dockerignore` excludes `.env`, Google credentials, tokens, the knowledge base, and local output so they are not copied into the image. The API container does not need Google credentials when querying previously ingested vectors. Complete OAuth ingestion locally first, then mount the token and client files separately:
 
 ```bash
 docker run --rm --env-file .env -v "$PWD/data:/app/data" \
@@ -154,30 +154,30 @@ docker run --rm --env-file .env -v "$PWD/data:/app/data" \
   rag-ai-knowledge-assistant python scripts/ingest_drive.py --confirm-cost
 ```
 
-当前方案面向单机本地 Chroma 与 SQLite；多机部署需要独立存储服务。本次已尝试 Docker 构建，但 Docker Hub 的 python:3.12-slim 元数据拉取超时，尚未完成容器构建/运行验证；也没有真实 Google/OpenAI 端到端验证。
+The current design targets a single host with local Chroma and SQLite. Multi-host deployments require dedicated storage services. A Docker build was attempted, but fetching metadata for Docker Hub's python:3.12-slim image timed out, so container build/runtime verification is not complete. Real Google/OpenAI end-to-end verification has also not been performed.
 
-## 测试与人工验收
+## Testing and Manual Acceptance
 
 ```bash
 python -m pytest -q
 python -m pip check
 ```
 
-自动化使用模拟聊天/Embedding、临时 Chroma 集合、临时 SQLite，不依赖生产数据。覆盖页码、稳定 ID、去重、文件版本更新/失败保留/隔离、旧集合查询保护、适配元数据、普通/流式请求、追问改写、引用错误、会话持久化/隔离、超时/服务失败、认证和静态页面安全。
+Automated tests use mocked chat/embedding services, temporary Chroma collections, and temporary SQLite databases; they do not depend on production data. Coverage includes page numbers, stable IDs, deduplication, file version updates/failure retention/isolation, old-collection query protection, metadata adaptation, standard/streaming requests, follow-up rewriting, citation errors, session persistence/isolation, timeouts/service failures, authentication, and static-page security.
 
-实际浏览器检查（额外需要 Node 与 Playwright）：
+Manual browser verification additionally requires Node and Playwright:
 
 ```bash
-# 终端一：仅本机离线测试服务，临时会话库
+# Terminal 1: local-only offline test service with a temporary session database
 python tests/ui_server.py
-# 终端二：在临时 npm 环境安装 playwright 并缓存 Chromium
+# Terminal 2: install Playwright in a temporary npm environment and cache Chromium
 node tests/browser.cjs
 ```
 
-可设置 `PLAYWRIGHT_MODULE` 指向外部已安装的 playwright 模块，避免给应用增加前端依赖。脚本验证发送、Enter/Shift+Enter、流式待验证状态、来源卡片、新对话、恶意 HTML 安全显示、引用失败、取消不写历史与手机布局；截图输出到 `/tmp/rag-chat-desktop.png` 和 `/tmp/rag-chat-mobile.png`。
+Set `PLAYWRIGHT_MODULE` to an externally installed Playwright module to avoid adding a frontend dependency to the application. The script verifies sending, Enter/Shift+Enter, streaming validation state, source cards, new conversations, safe display of malicious HTML, citation failures, cancellation without history writes, and the mobile layout. Screenshots are written to `/tmp/rag-chat-desktop.png` and `/tmp/rag-chat-mobile.png`.
 
-真实模型验收问题示例见 [docs/evaluation.md](docs/evaluation.md)。需要配置真实凭证并明确同意 API 费用后再运行。自动化不评判模型答案逐字一致，也不代替业务事实核验。
+Example questions for real-model acceptance are available in [docs/evaluation.md](docs/evaluation.md). Configure real credentials and explicitly approve API charges before running them. Automated tests do not judge byte-for-byte model answers and do not replace business-level factual verification.
 
-## 官方 API 参考
+## Official API References
 
-实现参考 [LlamaIndex SentenceSplitter](https://developers.llamaindex.ai/python/framework-api-reference/node_parsers/sentence_splitter/)、[ChromaVectorStore](https://developers.llamaindex.ai/python/framework-api-reference/storage/vector_store/chroma/)、[OpenAIEmbedding](https://developers.llamaindex.ai/python/framework-api-reference/embeddings/openai/) 与 [LangChain ChatOpenAI](https://docs.langchain.com/oss/python/integrations/chat/openai)。官方页面可能随版本更新；本项目安装版本另经本地实际 API 和集成测试验证。
+The implementation refers to [LlamaIndex SentenceSplitter](https://developers.llamaindex.ai/python/framework-api-reference/node_parsers/sentence_splitter/), [ChromaVectorStore](https://developers.llamaindex.ai/python/framework-api-reference/storage/vector_store/chroma/), [OpenAIEmbedding](https://developers.llamaindex.ai/python/framework-api-reference/embeddings/openai/), and [LangChain ChatOpenAI](https://docs.langchain.com/oss/python/integrations/chat/openai). Official pages may change over time; the installed versions in this project were separately verified through local API and integration tests.
