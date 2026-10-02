@@ -21,12 +21,12 @@ class Retriever:
         self.queries.append(question)
         if self.error:
             raise self.error
-        return [NodeWithScore(node=TextNode(id_='chunk-1', text='申请需要身份证，办理时间为工作日。', metadata={
-            'file_name': '办理指南.pdf', 'file_id': 'file-1', 'source_link': 'https://example.com/doc', 'page_number': 2}), score=.9)]
+        return [NodeWithScore(node=TextNode(id_='chunk-1', text='An identity document is required; processing is available on business days.', metadata={
+            'file_name': 'Application Guide.pdf', 'file_id': 'file-1', 'source_link': 'https://example.com/doc', 'page_number': 2}), score=.9)]
 
 
 class Model:
-    def __init__(self, answer='需要身份证。[1]'):
+    def __init__(self, answer='An identity document is required. [1]'):
         self.answer = answer
         self.prompts = []
         self.closed = False
@@ -37,7 +37,7 @@ class Model:
         if self.error:
             raise self.error
         if 'Rewrite' in messages[0].content:
-            return AIMessage(content='申请该业务需要什么材料？')
+            return AIMessage(content='What documents are required for this application?')
         return AIMessage(content=self.answer, usage_metadata={'input_tokens': 30, 'output_tokens': 5, 'total_tokens': 35})
 
     async def astream(self, messages):
@@ -63,16 +63,16 @@ def bundle(tmp_path):
 
 def test_old_request_and_conversation_followup(bundle):
     app, client, model, retriever = bundle
-    result = client.post('/chat', json={'question': '怎样申请？'})
+    result = client.post('/chat', json={'question': 'How do I apply?'})
     assert result.status_code == 200
     data = result.json()
-    assert data['sources'][0] == dict(citation_id=1, chunk_id='chunk-1', file_name='办理指南.pdf', file_id='file-1',
-        source_link='https://example.com/doc', page_number=2, snippet='申请需要身份证，办理时间为工作日。')
+    assert data['sources'][0] == dict(citation_id=1, chunk_id='chunk-1', file_name='Application Guide.pdf', file_id='file-1',
+        source_link='https://example.com/doc', page_number=2, snippet='An identity document is required; processing is available on business days.')
     assert data['request_id'] == result.headers['X-Request-ID']
     assert data['latency_ms'] >= 0 and data['usage']['total_tokens'] == 35
     cid = data['conversation_id']
-    assert client.post('/chat', json={'question': '那需要什么材料？', 'conversation_id': cid}).status_code == 200
-    assert retriever.queries == ['怎样申请？', '申请该业务需要什么材料？']
+    assert client.post('/chat', json={'question': 'What documents does it require?', 'conversation_id': cid}).status_code == 200
+    assert retriever.queries == ['How do I apply?', 'What documents are required for this application?']
     assert len(model.prompts) == 3  # one rewrite + two answers, two retrievals
     assert len(client.get(f'/conversations/{cid}').json()['turns']) == 2
 
@@ -91,7 +91,7 @@ def test_browser_isolation_and_forged_cookie(bundle):
 
 def test_stream_legacy_protocol_and_sources(bundle):
     _, client, model, _ = bundle
-    response = client.post('/chat/stream', json={'question': '材料？'})
+    response = client.post('/chat/stream', json={'question': 'Documents?'})
     assert response.status_code == 200
     assert '"token":' in response.text and 'data: [DONE]' in response.text
     assert '"type": "sources"' in response.text and '"validated": true' in response.text
@@ -102,7 +102,7 @@ def test_stream_legacy_protocol_and_sources(bundle):
 @pytest.mark.parametrize('stream', [False, True])
 def test_invalid_citation_not_saved(bundle, stream):
     _, client, model, _ = bundle
-    model.answer = '虚构结论。[99]'
+    model.answer = 'Fabricated claim. [99]'
     cid = client.post('/conversations').json()['conversation_id']
     response = client.post('/chat/stream' if stream else '/chat', json={'question': 'hi', 'conversation_id': cid})
     if stream:
@@ -114,7 +114,7 @@ def test_invalid_citation_not_saved(bundle, stream):
     assert client.get(f'/conversations/{cid}').json()['turns'] == []
 
 
-@pytest.mark.parametrize('error,status', [(VectorStoreError('知识库为空'), 503), (TimeoutError(), 504), (RuntimeError('SECRET'), 502)])
+@pytest.mark.parametrize('error,status', [(VectorStoreError('The knowledge base is empty'), 503), (TimeoutError(), 504), (RuntimeError('SECRET'), 502)])
 def test_explicit_errors_and_no_sensitive_leak(bundle, error, status):
     _, client, model, retriever = bundle
     retriever.error = error

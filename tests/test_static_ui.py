@@ -8,7 +8,7 @@ def test_static_ui_and_security_headers(tmp_path):
         page = client.get('/')
         assert page.status_code == 200
         assert 'id="chat-form"' in page.text and 'data-endpoint="/chat/stream"' in page.text
-        assert 'lang="zh-CN"' in page.text
+        assert 'lang="en"' in page.text
         assert 'HttpOnly' in page.headers['set-cookie']
         assert "script-src 'self'" in page.headers['content-security-policy']
         assert client.get('/style.css').status_code == 200

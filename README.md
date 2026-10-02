@@ -1,183 +1,411 @@
-# Zhiku · Google Drive Document Q&A
+# Zhiku · AI Knowledge Assistant
 
-A Chinese web chat interface and RAG API built with FastAPI. The application has one combined pipeline:
+Zhiku is a FastAPI-based Retrieval-Augmented Generation (RAG) application for asking questions about documents stored in Google Drive. It provides a Chinese web chat interface, synchronous and streaming APIs, source citations, persistent conversations, and optional HTTP Basic authentication.
+
+## Features
+
+- Imports PDF, DOCX, and TXT files from one or more Google Drive folders
+- Preserves file names, Drive links, PDF page numbers, and stable chunk metadata
+- Uses LlamaIndex for document nodes, chunking, OpenAI embeddings, Chroma indexing, and retrieval
+- Uses LangChain for conversation-aware question rewriting, prompts, and OpenAI chat generation
+- Requires numbered citations and returns structured source metadata with every successful answer
+- Supports standard JSON responses and Server-Sent Events (SSE) streaming
+- Persists browser identities, conversations, and successful turns in SQLite
+- Prevents overlapping requests within the same conversation
+- Includes optional HTTP Basic authentication and same-origin request protection
+- Serves a responsive HTML/CSS/JavaScript chat interface directly from FastAPI
+
+## Architecture
 
 ```text
-Google Drive → page-aware parsing → LlamaIndex Document / SentenceSplitter
-             → LlamaIndex OpenAIEmbedding → ChromaVectorStore → Chroma
+Google Drive
+    │
+    ├── PDF / DOCX / TXT extraction
+    ├── LlamaIndex Document + SentenceSplitter
+    ├── OpenAIEmbedding
+    └── ChromaVectorStore + version manifest
 
-Question + server-side history → LangChain standalone-question rewrite when needed
-                               → LlamaIndex aretrieve (one question embedding, one retrieval)
-                               → NodeWithScore → LangChain Document → numbered context
-                               → LangChain ChatPromptTemplate / ChatOpenAI → answer + sources
+User question + conversation history
+    │
+    ├── LangChain standalone-question rewrite when needed
+    ├── LlamaIndex asynchronous retrieval
+    ├── numbered context with source metadata
+    ├── LangChain ChatOpenAI generation
+    └── citation validation → answer + sources
 ```
 
-LlamaIndex handles nodes, chunking, embeddings, the vector index, and asynchronous retrieval; QueryEngine is not used to generate answers. LangChain handles messages, follow-up question rewriting, prompts, and standard/streaming generation; there is no second retriever. FastAPI handles endpoints, authentication, sessions, and the static web interface. The application has no Agent, LangGraph, or switchable RAG backends.
+LlamaIndex owns indexing, embedding, and retrieval. LangChain owns message handling, prompts, question rewriting, and answer generation. FastAPI owns HTTP endpoints, authentication, sessions, error handling, and the web interface.
 
-## Installation and Configuration
+## Project Structure
 
-Use Python **3.12** or a compatible newer version (the locked dependencies require at least 3.12). This project was verified with Python 3.12.11. Run:
+```text
+app/
+  api/
+    auth.py              Basic Auth, browser identity, same-origin checks
+    chat.py              Conversation, chat, and streaming endpoints
+  db/
+    sessions.py          SQLite-backed sessions and conversation history
+    vector_store.py      LlamaIndex and persistent Chroma integration
+  services/
+    chunker.py           Page-aware node creation and stable IDs
+    drive_auth.py        Google OAuth and Drive API client
+    drive_loader.py      Google Drive listing, download, and text extraction
+    models.py            Shared document models
+    rag.py               Retrieval, generation, streaming, and citations
+  static/
+    index.html           Chat interface
+    app.js               Browser behavior and SSE handling
+    style.css            Responsive styling
+  config.py              Environment-based application settings
+  main.py                FastAPI application and static routes
+docs/
+  evaluation.md          Real-model evaluation prompts
+scripts/
+  ingest_drive.py        Google Drive ingestion command
+tests/                   Unit, integration, API, and browser tests
+Dockerfile
+requirements.txt         Direct dependencies
+requirements.lock        Verified transitive dependency constraints
+```
+
+## Requirements
+
+- Python 3.12 or newer
+- An OpenAI API key
+- A Google Cloud project with the Google Drive API enabled
+- A Google OAuth Desktop app client JSON file
+- Read access to at least one Google Drive folder
+
+## Installation
+
+Create a virtual environment and install the locked dependencies:
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt -c requirements.lock
+python -m pip install -r requirements.txt -c requirements.lock
+```
+
+Copy the environment template:
+
+```bash
 cp .env.example .env
 ```
 
-`requirements.txt` pins direct dependencies; `requirements.lock` pins the transitive dependencies from the verified environment. Core versions include langchain-core 0.3.86, langchain-openai 0.3.35, llama-index-core 0.12.52, llama-index-embeddings-openai 0.3.1, llama-index-vector-stores-chroma 0.4.2, and chromadb 1.5.9. Only the required framework components are installed. LlamaIndex workflows is a transitive dependency, but the application does not use workflows or Agents.
+`requirements.txt` lists the direct application and test dependencies. `requirements.lock` constrains the complete verified dependency set so local, CI, and Docker environments resolve consistently.
 
-Set `OPENAI_API_KEY` and `GOOGLE_DRIVE_FOLDER_ID` in `.env` (use a comma-separated list for multiple folders). When retaining an existing `.env`, add new settings manually instead of overwriting credentials.
+## Configuration
 
-| Setting | Default / Description |
-|---|---|
-| OPENAI_CHAT_MODEL | gpt-4o-mini |
-| OPENAI_EMBEDDING_MODEL | text-embedding-3-small |
-| OPENAI_EMBEDDING_DIMENSIONS | 1536; ingestion and retrieval must match |
-| VECTOR_STORE_DIR | data/chroma_v2; a new directory avoids opening the old production database |
-| CHROMA_COLLECTION | google_drive_llama_v1; use a new collection for the initial migration |
-| CHUNK_SIZE / CHUNK_OVERLAP | 768 / 100, counted in tokenizer tokens |
-| EMBEDDING_BATCH_SIZE | 64 |
-| RETRIEVAL_TOP_K | 5 |
-| CONTEXT_MAX_CHARS | 16000, the retrieved-context character budget |
-| HISTORY_MAX_TURNS / HISTORY_MAX_CHARS | 6 / 8000; retains a limited number of complete history turns |
-| REQUEST_TIMEOUT | 90 seconds, covering question rewriting, retrieval, and generation |
-| MAX_OUTPUT_TOKENS | 2000 |
-| SESSION_DB | data/sessions.sqlite3 |
-| SESSION_TTL_SECONDS | 604800, browser cookie identity lifetime |
-| COOKIE_SECURE | false for local HTTP; set to true for HTTPS deployments |
-| API_BASIC_AUTH_USERNAME / PASSWORD | Basic Auth is disabled when both are empty; both must be configured together |
+Set at least the following values in `.env`:
 
-The old `CHUNK_MIN_TOKENS`, `CHUNK_MAX_TOKENS`, and `CHUNK_OVERLAP_TOKENS` settings were removed and replaced by the names above. Initial chunking may download tiktoken's cl100k_base encoding table; this does not call a model or incur model charges. Cache the encoding table before running offline. There is no silent fallback tokenizer because that would cause chunk boundaries to drift across environments.
+```dotenv
+OPENAI_API_KEY=your-openai-api-key
+GOOGLE_DRIVE_FOLDER_ID=folder-id-1,folder-id-2
+GOOGLE_OAUTH_CREDENTIALS_FILE=credentials.json
+GOOGLE_OAUTH_TOKEN_FILE=token.json
+```
 
-## Google Drive Authentication and Ingestion
+Available settings:
 
-1. Enable the Drive API in a Google Cloud project, configure the OAuth consent screen, and create a **Desktop app** OAuth client.
-2. Save the client file as `credentials.json`, or set `GOOGLE_OAUTH_CREDENTIALS_FILE`.
-3. Set `GOOGLE_DRIVE_FOLDER_ID`; the signed-in account must be able to read the configured folders.
-4. Complete the read-only authorization flow in a local browser during the first ingestion. The token is stored in `token.json`; change its path with `GOOGLE_OAUTH_TOKEN_FILE`. Later runs reuse and refresh it.
+| Setting | Default | Description |
+|---|---:|---|
+| `OPENAI_CHAT_MODEL` | `gpt-4o-mini` | Chat model used for rewriting and answer generation |
+| `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model used for ingestion and retrieval |
+| `OPENAI_EMBEDDING_DIMENSIONS` | `1536` | Embedding dimensions; must match the Chroma collection |
+| `VECTOR_STORE_DIR` | `data/chroma_v2` | Persistent Chroma and version-manifest directory |
+| `CHROMA_COLLECTION` | `google_drive_llama_v1` | Chroma collection name |
+| `CHUNK_SIZE` | `768` | Target chunk size |
+| `CHUNK_OVERLAP` | `100` | Overlap between adjacent chunks |
+| `EMBEDDING_BATCH_SIZE` | `64` | OpenAI embedding batch size |
+| `RETRIEVAL_TOP_K` | `5` | Maximum retrieved nodes per question |
+| `CONTEXT_MAX_CHARS` | `16000` | Maximum retrieved context supplied to the model |
+| `HISTORY_MAX_TURNS` | `6` | Maximum conversation turns considered for rewriting |
+| `HISTORY_MAX_CHARS` | `8000` | Character budget for conversation history |
+| `REQUEST_TIMEOUT` | `90` | End-to-end request timeout in seconds |
+| `MAX_OUTPUT_TOKENS` | `2000` | Maximum generated answer tokens |
+| `SESSION_DB` | `data/sessions.sqlite3` | SQLite session database path |
+| `SESSION_TTL_SECONDS` | `604800` | Anonymous browser identity lifetime |
+| `COOKIE_SECURE` | `false` | Set to `true` when serving through HTTPS |
+| `API_BASIC_AUTH_USERNAME` | empty | Optional Basic Auth username |
+| `API_BASIC_AUTH_PASSWORD` | empty | Optional Basic Auth password |
 
-`app/services/drive_auth.py` is present, and the script imports `get_drive_service` directly. PDF, DOCX, and TXT files are supported, file listings are paginated, and shared drives are supported. PDFs retain physical page numbers; DOCX/TXT page numbers are null. Scanned PDFs without extractable text do not produce nodes. OCR, native Google Docs export, recursive subfolder traversal, and cloud deletion synchronization are not currently implemented.
+Both Basic Auth values must be configured together. `CHUNK_OVERLAP` must be nonnegative and smaller than `CHUNK_SIZE`; numeric limits must be positive.
 
-**The initial migration requires re-chunking and re-embedding and may incur OpenAI API charges.** The script requires an explicit cost-confirmation argument. No real ingestion was run during development.
+## Google Drive Setup
+
+1. Enable the Google Drive API in your Google Cloud project.
+2. Configure the OAuth consent screen.
+3. Create an OAuth client with the **Desktop app** application type.
+4. Download the client JSON and save it as `credentials.json`, or update `GOOGLE_OAUTH_CREDENTIALS_FILE`.
+5. Add the target folder IDs to `GOOGLE_DRIVE_FOLDER_ID`.
+6. Ensure the Google account used during OAuth can read those folders.
+
+The first ingestion opens a browser for read-only Google authorization. The resulting OAuth token is stored in `token.json` by default and is reused and refreshed automatically.
+
+Credential files, OAuth tokens, `.env`, Chroma data, and SQLite databases are excluded from Git and Docker build contexts.
+
+## Ingesting Documents
+
+Review your collection settings and potential OpenAI embedding charges, then run:
 
 ```bash
-python scripts/ingest_drive.py --help
-# Run only after reviewing the new directory, collection, and cost settings in .env:
 python scripts/ingest_drive.py --confirm-cost
 ```
 
-Each page creates a LlamaIndex Document and is split with SentenceSplitter. Nodes store `chunk_id`, `file_id`, `file_name`, `source_link`, `page_number`, `chunk_index`, `content_hash`, `chunk_version`, and the complete file `version`. Chroma stores 0 for an unknown page number; the API converts it back to null.
+The `--confirm-cost` flag is required because ingestion may call the OpenAI Embeddings API.
 
-Stable IDs include the file identity, complete file content and source metadata, chunk version/parameters, and position. Re-ingesting identical input does not add nodes or repeat embedding. Changes to file content, source metadata, or chunk parameters create a new version and require the entire file to be embedded again.
+The ingestion pipeline:
 
-### File Updates and Failure Recovery
+1. Lists supported files directly inside each configured Drive folder.
+2. Downloads PDF, DOCX, and TXT content.
+3. Preserves physical page numbers for PDFs.
+4. Cleans text and creates page-aware LlamaIndex nodes.
+5. Generates stable file versions and chunk IDs.
+6. Embeds missing nodes and writes them to persistent Chroma storage.
+7. Publishes a file version only after all of its nodes have been written successfully.
 
-Run the same ingestion command again. The application first writes every node for the new version and verifies the IDs, then publishes the file version transactionally through `versions.sqlite3`. Retrieval uses a LlamaIndex metadata filter to query only published versions. If ingestion fails, the old version remains active; partially staged nodes are excluded from retrieval and can be completed on the next run. Old versions are deactivated but remain on disk. This version does not automatically delete their physical data and does not remove unrelated files.
+Running ingestion again is safe. Unchanged chunks are skipped. When a file changes, the new complete version becomes searchable only after successful ingestion; an interrupted update does not replace the currently published version.
 
-A local file lock serializes concurrent ingestion processes; reads do not wait for the lock, and in-flight requests use the version snapshot from when they began. New requests see only the newly published version. Backup and restore the entire Chroma directory, including `versions.sqlite3`; do not discard the version manifest separately. If file parsing fails or yields no text, the old version stays active and the empty result is not treated as a deletion instruction. There is no need to delete old code again after merging into master: all required deletions are already included in the development branch commits.
+## Running the Application
 
-### Switching to the New Collection and Rolling Back
-
-The initial migration defaults to `data/chroma_v2` / `google_drive_llama_v1` while preserving the original `data/chroma` / `google_drive_docs`. You may also use another new collection name in a separate test copy. Do not direct new ingestion into the old collection.
-
-The same combined pipeline can query the old collection. Stop the service, back up the old directory first (copying it to a rollback directory is recommended so a newer Chroma version cannot upgrade the original data format), point `VECTOR_STORE_DIR` to the copy, set `CHROMA_COLLECTION=google_drive_docs`, configure the embedding model and dimensions actually used by the old database, and restart. LlamaIndex ChromaVectorStore provides the old-schema adapter. The old collection does not contain reliable model metadata, so its configuration must be confirmed manually. The ingestion program refuses to write to old-schema collections.
-
-When rolling back the code, also use the original backup directory and dependency versions. This work does not delete the original code backup branch. To return to the new collection, restore the new directory/collection settings and restart. Do not declare the old collection as the new schema or manually modify collection metadata.
-
-## Running the Service and Web Interface
+Start FastAPI with Uvicorn:
 
 ```bash
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open the [chat page](http://127.0.0.1:8000/) to stream responses, ask follow-up questions, inspect cited sources, create conversations, and stop generation. Press Enter to send and Shift+Enter for a new line. The responsive interface uses plain HTML/CSS/JavaScript. Text is rendered through `textContent`, so model-generated HTML is never executed; source links accept only http/https URLs.
+Open the chat interface:
 
-After Basic Auth is configured, opening the home page triggers the browser's native login dialog, and later requests call same-origin APIs. API keys, Google credentials, and tokens are never sent to the frontend. Without Basic Auth, the service is suitable only for a local or trusted network: visitors can query the knowledge base, but every browser receives a server-generated, registered, expiring HttpOnly/SameSite cookie and cannot read another user's history using only their conversation_id. With Basic Auth enabled, sessions are bound to the authenticated username; one username represents one user. If the model key is not configured, the home page and health check remain available, while chat requests return a clear 503 response.
+```text
+http://127.0.0.1:8000/
+```
 
-Sessions and successful turns are persisted in SQLite and survive service restarts. The current web interface does not automatically reopen the last conversation, but the API can retrieve recent history for a specified session. After the cookie expires, an anonymous user can no longer access history belonging to the previous identity. History is used only to understand questions; business conclusions must be generated from documents retrieved for the current request. Concurrent requests within the same session return 409 to prevent interleaved history, while different sessions can run concurrently.
+The interface supports streaming answers, follow-up questions, source cards, new conversations, cancellation, keyboard submission, and responsive mobile layouts.
 
-## API and Streaming Protocol
+Check application health:
 
-Legacy requests may continue to send only `question`:
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+Example response:
+
+```json
+{"status":"ok","configured":true}
+```
+
+`configured` indicates whether an OpenAI-backed RAG pipeline is available. The health endpoint does not perform an end-to-end OpenAI or knowledge-base query.
+
+## API
+
+Interactive OpenAPI documentation is available at:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+### Create a Conversation
+
+```bash
+curl -c /tmp/rag-cookie.txt -b /tmp/rag-cookie.txt \
+  -X POST http://127.0.0.1:8000/conversations
+```
+
+```json
+{
+  "conversation_id": "c787d59a-50aa-448a-927f-b2ce5d5d3d82",
+  "request_id": "8cb22ab4-e923-4851-9db8-5e997cc733a8"
+}
+```
+
+### Ask a Question
+
+The `conversation_id` is optional. If omitted, the server creates a conversation automatically.
 
 ```bash
 curl -c /tmp/rag-cookie.txt -b /tmp/rag-cookie.txt \
   -H 'Content-Type: application/json' \
-  -d '{"question":"What documents are required for the application?"}' http://127.0.0.1:8000/chat
+  -d '{"question":"What documents are required?"}' \
+  http://127.0.0.1:8000/chat
 ```
 
-When authentication is enabled, add `-u 'username:password'`; never put real passwords in shared scripts or source control. For follow-up requests, send the `conversation_id` from the response. Anonymous clients must preserve the cookie.
+Example response shape:
 
-- `POST /conversations`: creates and returns a conversation_id.
-- `GET /conversations/{id}`: returns a limited number of recent successful turns visible to the current user.
-- `POST /chat`: returns answer, conversation_id, request_id, sources, latency_ms, available usage data, and per-stage timing.
-- `POST /chat/stream`: returns an SSE stream.
-- `GET /health`: reports process liveness and whether the model is configured; it does **not** prove end-to-end availability of the remote API or knowledge base.
+```json
+{
+  "answer": "The application requires an identity document. [1]",
+  "conversation_id": "c787d59a-50aa-448a-927f-b2ce5d5d3d82",
+  "request_id": "8cb22ab4-e923-4851-9db8-5e997cc733a8",
+  "sources": [
+    {
+      "citation_id": 1,
+      "chunk_id": "...",
+      "file_name": "policy.pdf",
+      "file_id": "...",
+      "source_link": "https://drive.google.com/...",
+      "page_number": 3,
+      "snippet": "..."
+    }
+  ],
+  "usage": null,
+  "retrieval_ms": 24.8,
+  "generation_ms": 402.1,
+  "rewrite_ms": 0.0,
+  "rewrite_usage": null,
+  "latency_ms": 431.6
+}
+```
 
-Each source contains `citation_id`, `chunk_id`, `file_name`, `file_id`, `source_link`, `page_number`, and `snippet`. Source numbering starts at 1. The snippet previews the actual passage supplied to the model and is limited to 500 characters.
+To continue a conversation, send its ID with the next question:
 
-SSE preserves the legacy `{"token":"..."}` payload and the `[DONE]` marker on successful completion. Clients remain compatible by ignoring unknown fields in the new messages:
+```json
+{
+  "question": "What about international applicants?",
+  "conversation_id": "c787d59a-50aa-448a-927f-b2ce5d5d3d82"
+}
+```
+
+### Stream an Answer
+
+```bash
+curl -N -c /tmp/rag-cookie.txt -b /tmp/rag-cookie.txt \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"Summarize the application requirements."}' \
+  http://127.0.0.1:8000/chat/stream
+```
+
+The endpoint returns Server-Sent Events:
 
 ```text
 data: {"type":"start","conversation_id":"...","request_id":"...","validated":false}
 
 data: {"type":"sources","sources":[...],"validated":false}
 
-data: {"token":"An ID card is required.","validated":false}
+data: {"token":"The application","validated":false}
 
-data: {"type":"complete","answer":"An ID card is required. [1]","sources":[...],"validated":true,"latency_ms":321,...}
+data: {"type":"complete","answer":"... [1]","sources":[...],"validated":true,...}
 
 data: [DONE]
 ```
 
-Errors use `event: error` and a JSON payload containing `type`, error `code`, `detail`, `request_id`, and `validated:false`; they do not send `complete` or `[DONE]`. Standard endpoints return an HTTP status and `detail.code/message/request_id`. A valid citation requires at least one `[number]`, and every number must identify a source from the current request. This validates only citation format and range; it **does not prove factual accuracy or that a citation supports the conclusion**. When the available material is insufficient, the model should identify what is missing and cite the relevant material it inspected.
+Streamed tokens remain unvalidated until the `complete` event. If generation or citation validation fails, the stream emits an `event: error` payload and does not send `complete` or `[DONE]`.
 
-An empty knowledge base or missing model key returns 503; inaccessible or nonexistent sessions return 404; busy sessions return 409; timeouts return 504; rate limits return 429; citation errors and upstream failures return 502. After a streaming response has started, errors are reported through SSE. Streamed text remains unvalidated until the `complete` event, and the web interface clearly marks errors and interruptions. Cancellation closes the asynchronous generation stream and attempts to cancel upstream work; failed and incomplete responses are not stored in successful history. Synchronous Chroma queries and database operations run outside the FastAPI event loop; local work already running in a thread cannot be forcibly stopped.
+### Retrieve Conversation History
 
-Logs record request_id, retrieval/generation/rewrite/total duration, error type, and token usage when the model provides it; otherwise usage is null. Incomplete stage metrics may be null on failure. Complete prompts, document text, and secrets are not logged by default, and LangSmith tracing is disabled. Reverse proxies must disable SSE buffering and forward the correct same-origin host/scheme; cross-site write requests are rejected.
+```bash
+curl -c /tmp/rag-cookie.txt -b /tmp/rag-cookie.txt \
+  http://127.0.0.1:8000/conversations/{conversation_id}
+```
+
+Only successful turns owned by the current browser identity or authenticated user are returned.
+
+### Error Responses
+
+| Status | Meaning |
+|---:|---|
+| `400` / `422` | Invalid request payload |
+| `401` | Missing or invalid Basic Auth credentials |
+| `403` | Cross-origin write request rejected |
+| `404` | Conversation does not exist or belongs to another identity |
+| `409` | The conversation already has an active request |
+| `429` | OpenAI rate limit reached |
+| `502` | Upstream generation failure or invalid citations |
+| `503` | OpenAI is not configured or the knowledge base is unavailable |
+| `504` | Request timed out |
+
+Error responses include the request ID when processing reached the chat pipeline. Use the `X-Request-ID` response header and server logs for troubleshooting.
+
+## Authentication and Security
+
+For local development, Basic Auth may remain disabled. Each browser then receives an opaque, expiring `rag_session` cookie that owns its conversations. Knowing another conversation ID is not sufficient to access its history.
+
+For shared or remote environments, configure both:
+
+```dotenv
+API_BASIC_AUTH_USERNAME=your-username
+API_BASIC_AUTH_PASSWORD=use-a-strong-password
+COOKIE_SECURE=true
+```
+
+When Basic Auth is enabled, conversations belong to the authenticated username. The application also:
+
+- Uses HttpOnly, SameSite=Strict session cookies
+- Rejects cross-site write requests
+- Adds Content Security Policy and `X-Content-Type-Options` headers
+- Disables response caching
+- Accepts only HTTP/HTTPS source links
+- Renders model output as text rather than executable HTML
+- Treats retrieved documents and conversation history as untrusted input
+- Excludes secrets and full document contents from normal application logs
+
+Run behind HTTPS before enabling `COOKIE_SECURE=true`. A reverse proxy must preserve the original host and scheme and disable buffering for SSE responses.
+
+## Data and Persistence
+
+- Chroma vectors and the version manifest are stored under `VECTOR_STORE_DIR`.
+- Conversation identities and successful turns are stored in `SESSION_DB`.
+- Failed, cancelled, timed-out, or citation-invalid answers are not added to successful history.
+- Retrieval uses only published file versions.
+- Back up the complete vector-store directory, including `versions.sqlite3`.
+
+The current storage design targets a single host. Multi-host deployment requires shared or external vector and session storage.
 
 ## Docker
 
+Build the image:
+
 ```bash
 docker build -t rag-ai-knowledge-assistant .
-docker run --rm -p 8000:8000 --env-file .env \
-  -v "$PWD/data:/app/data" rag-ai-knowledge-assistant
 ```
 
-`.dockerignore` excludes `.env`, Google credentials, tokens, the knowledge base, and local output so they are not copied into the image. The API container does not need Google credentials when querying previously ingested vectors. Complete OAuth ingestion locally first, then mount the token and client files separately:
+Run the API with persistent local data:
 
 ```bash
-docker run --rm --env-file .env -v "$PWD/data:/app/data" \
-  -v "$PWD/credentials.json:/app/credentials.json:ro" \
-  -v "$PWD/token.json:/app/token.json" \
-  rag-ai-knowledge-assistant python scripts/ingest_drive.py --confirm-cost
+docker run --rm -p 8000:8000 \
+  --env-file .env \
+  -v "$PWD/data:/app/data" \
+  rag-ai-knowledge-assistant
 ```
 
-The current design targets a single host with local Chroma and SQLite. Multi-host deployments require dedicated storage services. A Docker build was attempted, but fetching metadata for Docker Hub's python:3.12-slim image timed out, so container build/runtime verification is not complete. Real Google/OpenAI end-to-end verification has also not been performed.
+The Docker image preloads the tiktoken `cl100k_base` encoding. Local credentials, tokens, vector data, session databases, and output directories are excluded from the image by `.dockerignore`.
 
-## Testing and Manual Acceptance
+For the simplest OAuth flow, run ingestion on the host first, then mount the resulting `data` directory into the API container.
+
+## Testing
+
+Run the automated test suite and dependency consistency check:
 
 ```bash
 python -m pytest -q
 python -m pip check
 ```
 
-Automated tests use mocked chat/embedding services, temporary Chroma collections, and temporary SQLite databases; they do not depend on production data. Coverage includes page numbers, stable IDs, deduplication, file version updates/failure retention/isolation, old-collection query protection, metadata adaptation, standard/streaming requests, follow-up rewriting, citation errors, session persistence/isolation, timeouts/service failures, authentication, and static-page security.
+The tests use mocked model and embedding clients, temporary Chroma collections, and temporary SQLite databases. They cover ingestion, stable IDs, deduplication, version publication, retrieval, citations, sessions, authentication, streaming, errors, cancellation, timeouts, security headers, and the static interface.
 
-Manual browser verification additionally requires Node and Playwright:
+Optional browser acceptance tests require Node.js and Playwright:
 
 ```bash
-# Terminal 1: local-only offline test service with a temporary session database
+# Terminal 1
 python tests/ui_server.py
-# Terminal 2: install Playwright in a temporary npm environment and cache Chromium
+
+# Terminal 2
 node tests/browser.cjs
 ```
 
-Set `PLAYWRIGHT_MODULE` to an externally installed Playwright module to avoid adding a frontend dependency to the application. The script verifies sending, Enter/Shift+Enter, streaming validation state, source cards, new conversations, safe display of malicious HTML, citation failures, cancellation without history writes, and the mobile layout. Screenshots are written to `/tmp/rag-chat-desktop.png` and `/tmp/rag-chat-mobile.png`.
+Set `PLAYWRIGHT_MODULE` if Playwright is installed outside the project. Browser screenshots are written to `/tmp/rag-chat-desktop.png` and `/tmp/rag-chat-mobile.png`.
 
-Example questions for real-model acceptance are available in [docs/evaluation.md](docs/evaluation.md). Configure real credentials and explicitly approve API charges before running them. Automated tests do not judge byte-for-byte model answers and do not replace business-level factual verification.
+Real-model evaluation examples are available in [`docs/evaluation.md`](docs/evaluation.md). Running them requires valid credentials and may incur API charges.
 
-## Official API References
+## Current Limitations
 
-The implementation refers to [LlamaIndex SentenceSplitter](https://developers.llamaindex.ai/python/framework-api-reference/node_parsers/sentence_splitter/), [ChromaVectorStore](https://developers.llamaindex.ai/python/framework-api-reference/storage/vector_store/chroma/), [OpenAIEmbedding](https://developers.llamaindex.ai/python/framework-api-reference/embeddings/openai/), and [LangChain ChatOpenAI](https://docs.langchain.com/oss/python/integrations/chat/openai). Official pages may change over time; the installed versions in this project were separately verified through local API and integration tests.
+- Google Drive folders are not traversed recursively.
+- Native Google Docs files are not exported or ingested.
+- Scanned PDFs require OCR before ingestion.
+- Cloud file deletions do not automatically remove stored vectors.
+- Old physical file versions remain in Chroma after a newer version is published.
+- The built-in web interface does not automatically reopen the last conversation after a page reload.
+- Local Chroma and SQLite storage are intended for a single-host deployment.
+
+## License
+
+No license file is currently included in this repository.

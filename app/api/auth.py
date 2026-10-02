@@ -16,7 +16,7 @@ async def require_basic_auth(request: Request, credentials: HTTPBasicCredentials
         secrets.compare_digest(credentials.username.encode(), settings.api_basic_auth_username.encode()) and
         secrets.compare_digest(credentials.password.encode(), settings.api_basic_auth_password.encode())
     ):
-        raise HTTPException(401, '需要有效的登录凭证', headers={'WWW-Authenticate': 'Basic realm="Knowledge Assistant"'})
+        raise HTTPException(401, 'Valid login credentials are required', headers={'WWW-Authenticate': 'Basic realm="Knowledge Assistant"'})
     return 'user:' + credentials.username
 
 
@@ -26,7 +26,7 @@ async def owner(request: Request, user=Depends(require_basic_auth)):
         request.headers.get('sec-fetch-site') == 'cross-site' or
         (origin and (urlsplit(origin).scheme, urlsplit(origin).netloc) != (request.url.scheme, request.url.netloc))
     ):
-        raise HTTPException(403, '仅允许同源请求')
+        raise HTTPException(403, 'Only same-origin requests are allowed')
     if user:
         return user
     identity, token = await asyncio.to_thread(request.app.state.sessions.browser,

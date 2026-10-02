@@ -50,7 +50,7 @@ class SessionStore:
 
     def check(self, db, cid, owner):
         if not db.execute('SELECT 1 FROM conversations WHERE id=? AND owner=?', (cid, owner)).fetchone():
-            raise SessionError('会话不存在或无权访问')
+            raise SessionError('The conversation does not exist or access is denied')
 
     def history(self, cid, owner, limit=6):
         with self.connect() as db:
@@ -66,7 +66,7 @@ class SessionStore:
             result = db.execute('UPDATE conversations SET busy_request=?,busy_until=? WHERE id=? AND busy_until<?',
                                 (request_id, time.time()+timeout+10, cid, time.time()))
             if not result.rowcount:
-                raise SessionError('此会话正在回答，请稍后重试')
+                raise SessionError('This conversation already has an active request; please try again later')
             ensure_active(deadline, cancelled)
 
     def save(self, cid, owner, request_id, question, answer, sources, deadline=None, cancelled=None):
@@ -75,7 +75,7 @@ class SessionStore:
             self.check(db, cid, owner)
             if not db.execute('SELECT 1 FROM conversations WHERE id=? AND busy_request=? AND busy_until>?',
                               (cid, request_id, time.time())).fetchone():
-                raise SessionError('会话请求已过期')
+                raise SessionError('The conversation request has expired')
             db.execute('INSERT INTO turns(conversation_id,question,answer,sources) VALUES (?,?,?,?)',
                        (cid, question, answer, json.dumps(sources, ensure_ascii=False)))
             db.execute('UPDATE conversations SET busy_request=NULL,busy_until=0 WHERE id=?', (cid,))

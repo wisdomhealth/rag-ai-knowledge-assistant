@@ -30,22 +30,22 @@ class ChatRequest(BaseModel):
     @classmethod
     def nonempty(cls, value):
         if not value.strip():
-            raise ValueError('问题不能为空')
+            raise ValueError('The question cannot be blank')
         return value.strip()
 
 
 def error_info(exc):
     if isinstance(exc, SessionError):
-        return 409 if '正在回答' in str(exc) else 404, 'invalid_session', str(exc)
+        return 409 if 'active request' in str(exc) else 404, 'invalid_session', str(exc)
     if isinstance(exc, (TimeoutError, APITimeoutError)):
-        return 504, 'timeout', '请求超时，请稍后重试'
+        return 504, 'timeout', 'The request timed out; please try again'
     if isinstance(exc, RateLimitError):
-        return 429, 'rate_limit', '模型服务限流，请稍后重试'
+        return 429, 'rate_limit', 'The model service is rate limited; please try again'
     if isinstance(exc, CitationError):
         return 502, 'invalid_citation', str(exc)
     if isinstance(exc, VectorStoreError):
         return 503, 'knowledge_unavailable', str(exc)
-    return 502, 'upstream_error', '检索或模型服务暂不可用，请使用 request_id 联系管理员'
+    return 502, 'upstream_error', 'Retrieval or the model service is temporarily unavailable; contact an administrator with the request_id'
 
 
 def log_result(request_id, started, result=None, error=None):
@@ -96,7 +96,7 @@ async def chat(payload: ChatRequest, request: Request, identity=Depends(owner)):
         async with asyncio.timeout(max(0, deadline - monotonic())):
             cid, previous = await prepare(request, payload, identity, deadline, cancelled)
             if request.app.state.rag is None:
-                raise VectorStoreError('OPENAI_API_KEY 未配置')
+                raise VectorStoreError('OPENAI_API_KEY is not configured')
             result = asdict(await request.app.state.rag.answer(payload.question, previous, metrics=metrics))
             if await request.is_disconnected():
                 raise asyncio.CancelledError()
@@ -142,7 +142,7 @@ async def stream_chat(payload: ChatRequest, request: Request, identity=Depends(o
             yield frame({'type': 'start', 'conversation_id': cid, 'request_id': rid, 'validated': False})
             async with asyncio.timeout(max(0, deadline - monotonic())):
                 if request.app.state.rag is None:
-                    raise VectorStoreError('OPENAI_API_KEY 未配置')
+                    raise VectorStoreError('OPENAI_API_KEY is not configured')
                 async with aclosing(request.app.state.rag.stream_answer(payload.question, previous, metrics=metrics)) as stream:
                     async for event in stream:
                         if await request.is_disconnected():

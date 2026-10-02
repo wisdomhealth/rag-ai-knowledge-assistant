@@ -14,7 +14,7 @@ function message(role, text) {
   const card = document.createElement('article');
   card.className = `message ${role}`;
   const title = document.createElement('h2');
-  title.textContent = role === 'user' ? '你' : '知库助手';
+  title.textContent = role === 'user' ? 'You' : 'Zhiku Assistant';
   const body = document.createElement('div');
   body.className = 'body';
   body.textContent = text;
@@ -33,7 +33,7 @@ function sources(card, items) {
     const detail = document.createElement('details');
     detail.className = 'source';
     const summary = document.createElement('summary');
-    summary.textContent = `[${source.citation_id}] ${source.file_name} · ${source.page_number == null ? '页码未知' : `第 ${source.page_number} 页`}`;
+    summary.textContent = `[${source.citation_id}] ${source.file_name} · ${source.page_number == null ? 'Page unknown' : `Page ${source.page_number}`}`;
     const snippet = document.createElement('p');
     snippet.textContent = source.snippet;
     detail.append(summary, snippet);
@@ -44,7 +44,7 @@ function sources(card, items) {
         link.href = url.href;
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
-        link.textContent = '查看原文 ↗';
+        link.textContent = 'View source ↗';
         detail.append(link);
       }
     } catch (_) { /* Invalid or absent source URL: show text only. */ }
@@ -57,7 +57,7 @@ async function check(response) {
   if (response.ok) return response;
   const data = await response.json().catch(() => ({}));
   const detail = data.detail;
-  throw new Error(typeof detail === 'string' ? detail : detail?.message || `请求失败（${response.status}）`);
+  throw new Error(typeof detail === 'string' ? detail : detail?.message || `Request failed (${response.status})`);
 }
 
 newChat.addEventListener('click', async () => {
@@ -68,7 +68,7 @@ newChat.addEventListener('click', async () => {
     messages.replaceChildren();
     document.querySelector('#welcome').hidden = false;
     statusText.className = '';
-    statusText.textContent = '已新建对话';
+    statusText.textContent = 'New conversation created';
     input.focus();
   } catch (error) {
     statusText.textContent = error.message;
@@ -94,13 +94,13 @@ form.addEventListener('submit', async event => {
   message('user', question);
   const reply = message('assistant', '');
   reply.card.classList.add('pending');
-  reply.note.textContent = '生成中 · 内容待验证';
+  reply.note.textContent = 'Generating · Content pending validation';
   input.value = '';
   controller = new AbortController();
   send.disabled = newChat.disabled = true;
   stop.hidden = false;
   statusText.className = '';
-  statusText.textContent = '正在检索与生成…';
+  statusText.textContent = 'Retrieving and generating…';
   let completed = false;
   let reader;
   try {
@@ -117,15 +117,15 @@ form.addEventListener('submit', async event => {
       if (!data || data === '[DONE]') return;
       const item = JSON.parse(data);
       if (item.conversation_id) conversationId = item.conversation_id;
-      if (item.type === 'error') throw new Error(`${item.detail}（${item.request_id}）`);
+      if (item.type === 'error') throw new Error(`${item.detail} (${item.request_id})`);
       if (item.token) reply.body.textContent += item.token;
       if (item.sources) sources(reply.card, item.sources);
       if (item.type === 'complete' && item.validated === true) {
         completed = true;
         reply.body.textContent = item.answer;
-        reply.note.textContent = `引用编号已检查 · ${(item.latency_ms / 1000).toFixed(2)} 秒 · 请核对来源是否支持结论`;
+        reply.note.textContent = `Citation numbers checked · ${(item.latency_ms / 1000).toFixed(2)} seconds · Verify that the sources support the answer`;
         reply.card.classList.remove('pending');
-        statusText.textContent = '完成';
+        statusText.textContent = 'Complete';
       }
     }
     while (true) {
@@ -140,11 +140,11 @@ form.addEventListener('submit', async event => {
       }
       if (done) break;
     }
-    if (!completed) throw new Error('连接中断，回答未完成或未通过验证');
+    if (!completed) throw new Error('The connection ended before the answer completed or passed validation');
   } catch (error) {
     reply.card.classList.add('error');
     reply.card.classList.remove('pending');
-    reply.note.textContent = error.name === 'AbortError' ? '已停止 · 此回复未完成验证' : error.message;
+    reply.note.textContent = error.name === 'AbortError' ? 'Stopped · This response did not complete validation' : error.message;
     statusText.textContent = reply.note.textContent;
     statusText.className = 'error';
   } finally {

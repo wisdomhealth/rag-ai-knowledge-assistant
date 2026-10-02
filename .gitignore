@@ -1,4 +1,4 @@
-.env
+.env1
 .venv/
 credentials.json
 token.json
@@ -15,3 +15,5 @@ data/*.sqlite3*
 .env.*
 !.env.example
 /README_CN.md
+/docs/evaluation_cn.md
+/docs/implementation-plan_cn.md

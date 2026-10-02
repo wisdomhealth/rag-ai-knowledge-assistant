@@ -15,7 +15,7 @@ from test_chat import Model, Retriever
 class BrowserModel(Model):
     async def astream(self, messages):
         question = messages[-1].content.rsplit('User question: ', 1)[-1]
-        text = '无效引用 [99]' if question == '测试错误' else '需要身份证。[1] <img src=x onerror=alert(1)>'
+        text = 'Invalid citation [99]' if question == 'Test error' else 'An identity document is required. [1] <img src=x onerror=alert(1)>'
         try:
             for token in text:
                 await asyncio.sleep(.04)

@@ -45,7 +45,7 @@ def to_documents(nodes):
 def validate_citations(answer, count):
     refs = [int(n) for n in re.findall(r'\[(\d+)\]', answer)]
     if not answer.strip() or not refs or any(n < 1 or n > count for n in refs):
-        raise CitationError('回答引用缺失或编号无效；本次回答未通过验证，请重试')
+        raise CitationError('The answer is missing citations or contains invalid citation numbers; validation failed, please try again')
 
 
 def safe_link(value):
@@ -96,7 +96,7 @@ class RagPipeline:
             rewrite_usage = getattr(rewritten, 'usage_metadata', None)
             metrics['rewrite_usage'] = rewrite_usage
             if not retrieval_question:
-                raise ValueError('问题改写结果为空')
+                raise ValueError('The rewritten question is empty')
         rewrite_ms = (perf_counter()-rewrite_start)*1000
         start = perf_counter()
         try:
@@ -109,7 +109,7 @@ class RagPipeline:
         for doc in documents:
             m = doc.metadata
             citation = len(sources)+1
-            heading = f"[{citation}] {m.get('file_name', '')}；页码：{m['page_number'] or '未知'}\n"
+            heading = f"[{citation}] {m.get('file_name', '')}; Page: {m['page_number'] or 'Unknown'}\n"
             text = doc.page_content[:max(0, remaining-len(heading))]
             if not text.strip():
                 continue
@@ -120,7 +120,7 @@ class RagPipeline:
                                 file_id=m.get('file_id', ''), source_link=safe_link(m.get('source_link', '')),
                                 page_number=m['page_number'], snippet=text[:500]))
         if not sources:
-            raise VectorStoreError('知识库没有可用的检索片段')
+            raise VectorStoreError('The knowledge base has no usable retrieved passages')
         prompt = PROMPT.format_messages(context='\n\n'.join(blocks), question=retrieval_question)
         return prompt, sources, (perf_counter()-start)*1000, rewrite_ms, rewrite_usage
 

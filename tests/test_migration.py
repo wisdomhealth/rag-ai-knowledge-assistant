@@ -9,7 +9,7 @@ from app.services.models import DocumentPage
 
 def test_page_nodes_keep_metadata_and_stable_ids():
     from app.services.chunker import build_nodes
-    pages = [DocumentPage('a.pdf', 'file-a', 'https://example.com/a', p, '材料是身份证。' * 80) for p in (1, 2)]
+    pages = [DocumentPage('a.pdf', 'file-a', 'https://example.com/a', p, 'The required document is an identity card. ' * 80) for p in (1, 2)]
     nodes = build_nodes(pages, 64, 8)
     assert len(nodes) > 2
     assert {n.metadata['page_number'] for n in nodes} == {1, 2}
@@ -73,7 +73,7 @@ def test_legacy_collection_readonly_and_dimension_guard(tmp_path):
         legacy.ingest([])
     fresh = replace(settings, chroma_collection='new_docs')
     KnowledgeIndex(fresh, MockEmbedding(embed_dim=8))
-    with pytest.raises(VectorStoreError, match='维度'):
+    with pytest.raises(VectorStoreError, match='dimensions'):
         KnowledgeIndex(replace(fresh, embedding_dimensions=16), MockEmbedding(embed_dim=16))
     assert collection.count() == 1
 
@@ -82,7 +82,7 @@ def test_empty_knowledge_no_embedding_call(tmp_path):
     from llama_index.core.embeddings import MockEmbedding
     from app.db.vector_store import KnowledgeIndex, VectorStoreError
     store = KnowledgeIndex(Settings(vector_store_dir=tmp_path, embedding_dimensions=8), MockEmbedding(embed_dim=8))
-    with pytest.raises(VectorStoreError, match='为空'):
+    with pytest.raises(VectorStoreError, match='empty'):
         asyncio.run(store.aretrieve('hello', 1))
 
 

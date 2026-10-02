@@ -10,7 +10,7 @@ def test_persistence_owner_expiry_and_busy(tmp_path):
     assert store.browser(cookie, 60) == (owner, None)
     cid = store.create(owner)
     store.acquire(cid, owner, 'request-1', 60)
-    with pytest.raises(SessionError, match='正在回答'):
+    with pytest.raises(SessionError, match='active request'):
         store.acquire(cid, owner, 'request-2', 60)
     with pytest.raises(SessionError):
         store.save(cid, 'other-owner', 'request-1', 'q', 'a', [])

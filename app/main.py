@@ -30,7 +30,7 @@ def create_app(settings=None, rag=None):
             app.state.rag = RagPipeline(store, settings)
         yield
 
-    app = FastAPI(title='知识库聊天助手', version='2.0.0', lifespan=lifespan)
+    app = FastAPI(title='AI Knowledge Assistant', version='2.0.0', lifespan=lifespan)
     app.state.settings = settings
     app.include_router(router)
 

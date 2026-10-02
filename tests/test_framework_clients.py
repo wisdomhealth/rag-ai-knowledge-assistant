@@ -20,7 +20,7 @@ def test_installed_clients_with_mock_http():
         if body.get('stream'):
             events = [
                 {'id': 'test', 'object': 'chat.completion.chunk', 'created': 1, 'model': 'gpt-4o-mini',
-                 'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': '资料 [1]'}, 'finish_reason': None}]},
+                 'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': 'Source material [1]'}, 'finish_reason': None}]},
                 {'id': 'test', 'object': 'chat.completion.chunk', 'created': 1, 'model': 'gpt-4o-mini',
                  'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]},
                 {'id': 'test', 'object': 'chat.completion.chunk', 'created': 1, 'model': 'gpt-4o-mini', 'choices': [],
@@ -28,7 +28,7 @@ def test_installed_clients_with_mock_http():
             return httpx.Response(200, headers={'content-type': 'text/event-stream'},
                                   text=''.join('data: '+json.dumps(e)+'\n\n' for e in events)+'data: [DONE]\n\n')
         return httpx.Response(200, json={'id': 'test', 'object': 'chat.completion', 'created': 1, 'model': 'gpt-4o-mini',
-            'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '资料 [1]'}, 'finish_reason': 'stop'}],
+            'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': 'Source material [1]'}, 'finish_reason': 'stop'}],
             'usage': {'prompt_tokens': 2, 'completion_tokens': 3, 'total_tokens': 5}})
 
     transport = httpx.MockTransport(handle)
@@ -42,9 +42,9 @@ def test_installed_clients_with_mock_http():
                 model = ChatOpenAI(api_key='offline-test', model='gpt-4o-mini', http_client=sync_http,
                                    http_async_client=async_http, stream_usage=True, max_retries=0)
                 message = await model.ainvoke([HumanMessage('question')])
-                assert message.content == '资料 [1]' and message.usage_metadata['total_tokens'] == 5
+                assert message.content == 'Source material [1]' and message.usage_metadata['total_tokens'] == 5
                 chunks = [chunk async for chunk in model.astream([HumanMessage('question')])]
-                assert ''.join(chunk.content for chunk in chunks) == '资料 [1]'
+                assert ''.join(chunk.content for chunk in chunks) == 'Source material [1]'
                 assert chunks[-1].usage_metadata['total_tokens'] == 5
     asyncio.run(run())
     assert len(calls) == 4
