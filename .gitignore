@@ -3,6 +3,7 @@
 credentials.json
 token.json
 client_secret_*.json
+/client_secret.json
 __pycache__/
 *.py[cod]
 .pytest_cache/

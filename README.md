@@ -115,6 +115,12 @@ Default local URL:
 http://127.0.0.1:8000
 ```
 
+The root page returns the AI Knowledge Assistant chat homepage:
+
+```text
+http://127.0.0.1:8000/
+```
+
 Health check:
 
 ```bash
