@@ -1,28 +1,17 @@
-from __future__ import annotations
-
-from pathlib import Path
-
 from fastapi.testclient import TestClient
-
-from app.main import app
-
-
-ROOT_DIR = Path(__file__).resolve().parents[1]
+from app.config import Settings
+from app.main import create_app
 
 
-def test_root_serves_chat_page() -> None:
-    client = TestClient(app)
-
-    response = client.get("/")
-
-    assert response.status_code == 200
-    assert "text/html" in response.headers["content-type"]
-    assert 'id="chat-form"' in response.text
-    assert 'data-endpoint="/chat"' in response.text
-
-
-def test_static_assets_live_under_app_static() -> None:
-    assert (ROOT_DIR / "app/static/index.html").is_file()
-    assert (ROOT_DIR / "app/static/style.css").is_file()
-    assert not (ROOT_DIR / "index.html").exists()
-    assert not (ROOT_DIR / "style.css").exists()
+def test_static_ui_and_security_headers(tmp_path):
+    with TestClient(create_app(Settings(session_db=tmp_path/'s.db'))) as client:
+        page = client.get('/')
+        assert page.status_code == 200
+        assert 'id="chat-form"' in page.text and 'data-endpoint="/chat/stream"' in page.text
+        assert 'lang="zh-CN"' in page.text
+        assert 'HttpOnly' in page.headers['set-cookie']
+        assert "script-src 'self'" in page.headers['content-security-policy']
+        assert client.get('/style.css').status_code == 200
+        js = client.get('/app.js').text
+        assert '.innerHTML' not in js
+        assert 'textContent' in js and "['https:', 'http:']" in js

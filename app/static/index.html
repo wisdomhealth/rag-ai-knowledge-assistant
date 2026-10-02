@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>知库 · 文档问答</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body>
+<header><a class="brand" href="/">知库 <span>文档问答</span></a><button id="new-chat" type="button">＋ 新建对话</button></header>
+<main>
+<section id="welcome"><span class="eyebrow">GOOGLE DRIVE · 知识助手</span><h1>让每个回答，<br>都有据可查。</h1><p>向你的文档提问，追问细节，并查看回答依据。</p><div class="suggestions"><button type="button" data-question="文档中有哪些办理流程？">了解办理流程 ↗</button><button type="button" data-question="申请需要准备什么材料？">查找所需材料 ↗</button></div></section>
+<section id="messages" aria-label="聊天消息" aria-live="polite"></section>
+<div class="composer"><p id="status" role="status">就绪 · 回答会附带文档来源</p><form id="chat-form" data-endpoint="/chat/stream"><label for="question" class="sr-only">输入问题</label><textarea id="question" placeholder="输入你的问题，或继续追问…" rows="2" maxlength="4000" required></textarea><button id="send" type="submit">发送 ↑</button><button id="stop" type="button" hidden>停止</button></form><small>Enter 发送 · Shift + Enter 换行　|　引用编号检查不等于事实核验，请核对原文。</small></div>
+</main><footer>以文档为依据　·　用来源核对每个回答</footer>
+</body></html>
