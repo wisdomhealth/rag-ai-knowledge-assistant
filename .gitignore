@@ -10,3 +10,7 @@ __pycache__/
 data/chroma/*
 !data/chroma/.gitkeep
 *_rag_*.pdf
+data/chroma_v2/
+data/*.sqlite3*
+.env.*
+!.env.example

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import sys
 from pathlib import Path
@@ -9,76 +10,50 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.config import get_settings
-from app.db.vector_store import ChromaVectorStore
-from app.services.chunker import TextChunker
+from app.db.vector_store import KnowledgeIndex
+from app.services.chunker import build_nodes
 from app.services.drive_auth import get_drive_service
 from app.services.drive_loader import GoogleDriveLoader
-from app.services.embedding import OpenAIEmbeddingService
-from app.services.models import DocumentPage
 from app.utils.logger import configure_logging, get_logger
-
 
 logger = get_logger(__name__)
 
 
-async def collect_pages(loader: GoogleDriveLoader, folder_ids: tuple[str, ...]) -> list[DocumentPage]:
-    """Materialize pages from all configured Drive folders before chunking."""
-    pages: list[DocumentPage] = []
-    async for page in loader.iter_folder_documents(folder_ids):
+async def ingest(loader, settings, store):
+    # Loader yields every successfully parsed file contiguously. Never publish partial pages.
+    pages = []
+    added = 0
+    async for page in loader.iter_folder_documents(settings.google_drive_folder_ids):
+        if pages and pages[-1].file_id != page.file_id:
+            nodes = await asyncio.to_thread(build_nodes, pages, settings.chunk_size, settings.chunk_overlap)
+            added += await asyncio.to_thread(store.ingest, nodes)
+            pages = []
         pages.append(page)
-    return pages
+    if pages:
+        nodes = await asyncio.to_thread(build_nodes, pages, settings.chunk_size, settings.chunk_overlap)
+        added += await asyncio.to_thread(store.ingest, nodes)
+    return added
 
 
-async def main() -> None:
-    """Run the full Drive ingestion pipeline into the local vector store."""
+async def main():
+    parser = argparse.ArgumentParser(description='Google Drive → LlamaIndex → 新 Chroma 集合（可能产生 API 费用）')
+    parser.add_argument('--confirm-cost', action='store_true', help='确认下载、分块和收费向量化')
+    args = parser.parse_args()
+    if not args.confirm_cost:
+        parser.error('请审查集合配置和 API 费用后使用 --confirm-cost；未执行导入')
     configure_logging()
     settings = get_settings()
+    if not settings.openai_api_key:
+        raise ValueError('OPENAI_API_KEY 未配置')
     if not settings.google_drive_folder_ids:
-        raise ValueError("GOOGLE_DRIVE_FOLDER_ID is required. Use commas for multiple folders.")
-
-    vector_store = ChromaVectorStore(settings.vector_store_dir)
-    vector_store.load()
-
-    try:
-        drive_service = get_drive_service(
-            credentials_path=settings.google_oauth_credentials_file,
-            token_path=settings.google_oauth_token_file,
-        )
-    except FileNotFoundError as exc:
-        logger.error("%s", exc)
-        raise SystemExit(1) from exc
-
-    loader = GoogleDriveLoader(drive_service)
-    pages = await collect_pages(loader, settings.google_drive_folder_ids)
-    logger.info("Extracted %s pages/documents from Google Drive", len(pages))
-
-    chunker = TextChunker(
-        min_tokens=settings.chunk_min_tokens,
-        max_tokens=settings.chunk_max_tokens,
-        overlap_tokens=settings.chunk_overlap_tokens,
-    )
-    chunks = chunker.chunk_pages(pages)
-
-    # Chunks are content-addressed, so ingestion can be safely rerun without
-    # duplicating vectors that are already present in Chroma.
-    existing_ids = vector_store.existing_chunk_ids()
-    new_chunks = [chunk for chunk in chunks if chunk.chunk_id not in existing_ids]
-    logger.info("Prepared %s chunks (%s new, %s existing)", len(chunks), len(new_chunks), len(chunks) - len(new_chunks))
-
-    if not new_chunks:
-        logger.info("No new chunks to embed")
-        return
-
-    embedding_service = OpenAIEmbeddingService(
-        api_key=settings.openai_api_key,
-        model=settings.openai_embedding_model,
-        batch_size=settings.embedding_batch_size,
-    )
-    embeddings = await embedding_service.embed_texts([chunk.text for chunk in new_chunks])
-    added = vector_store.add(new_chunks, embeddings)
-    vector_store.save()
-    logger.info("Ingestion complete. Added %s chunks.", added)
+        raise ValueError('GOOGLE_DRIVE_FOLDER_ID 未配置')
+    store = await asyncio.to_thread(KnowledgeIndex, settings)
+    if store.legacy:
+        raise ValueError('不允许向旧集合导入；请配置新的 CHROMA_COLLECTION')
+    service = await asyncio.to_thread(get_drive_service, settings.google_oauth_credentials_file, settings.google_oauth_token_file)
+    count = await ingest(GoogleDriveLoader(service), settings, store)
+    logger.info('ingestion_complete added_chunks=%s', count)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     asyncio.run(main())

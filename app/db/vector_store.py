@@ -1,156 +1,99 @@
+"""LlamaIndex owns indexing, embedding and retrieval; SQLite publishes versions."""
 from __future__ import annotations
 
-from dataclasses import asdict
-from pathlib import Path
-from typing import Any
+import asyncio
+import sqlite3
+from collections import defaultdict
+from contextlib import closing
 
 import chromadb
-import numpy as np
+from filelock import FileLock
+from llama_index.core import VectorStoreIndex
+from llama_index.core.vector_stores import MetadataFilter, MetadataFilters, FilterOperator
+from llama_index.embeddings.openai import OpenAIEmbedding
+from llama_index.vector_stores.chroma import ChromaVectorStore
 
-from app.services.models import DocumentChunk
-from app.utils.logger import get_logger
-
-
-logger = get_logger(__name__)
-
-COLLECTION_NAME = "google_drive_docs"
+from app.config import Settings
 
 
 class VectorStoreError(RuntimeError):
-    """Raised when the vector store cannot serve the requested operation."""
-
     pass
 
 
-class ChromaVectorStore:
-    """Persistent Chroma-backed vector store for document chunks."""
+class AsyncChromaVectorStore(ChromaVectorStore):
+    async def aquery(self, query, **kwargs):
+        return await asyncio.to_thread(self.query, query, **kwargs)
 
-    def __init__(self, storage_dir: Path, collection_name: str = COLLECTION_NAME) -> None:
-        """Store Chroma connection settings until load() opens the collection."""
-        self.storage_dir = storage_dir
-        self.collection_name = collection_name
-        self.client: Any | None = None
-        self.collection: Any | None = None
 
-    @property
-    def is_ready(self) -> bool:
-        """Return whether the collection is loaded and contains vectors."""
-        return self.collection is not None and self.collection.count() > 0
+class KnowledgeIndex:
+    def __init__(self, settings: Settings, embed_model=None):
+        self.settings = settings
+        if embed_model is None:
+            if not settings.openai_api_key:
+                raise VectorStoreError('OPENAI_API_KEY 未配置')
+            embed_model = OpenAIEmbedding(api_key=settings.openai_api_key, model=settings.openai_embedding_model,
+                                          dimensions=settings.embedding_dimensions,
+                                          embed_batch_size=settings.embedding_batch_size,
+                                          timeout=settings.request_timeout, max_retries=0)
+        self.embed_model = embed_model
+        settings.vector_store_dir.mkdir(parents=True, exist_ok=True)
+        self.client = chromadb.PersistentClient(path=str(settings.vector_store_dir))
+        self.collection = self.client.get_or_create_collection(settings.chroma_collection,
+            metadata={'hnsw:space': 'cosine', 'schema': 'llama-v1',
+                      'embedding_model': settings.openai_embedding_model, 'dimensions': settings.embedding_dimensions})
+        metadata = self.collection.metadata or {}
+        self.legacy = metadata.get('schema') != 'llama-v1'
+        if not self.legacy and (metadata.get('embedding_model') != settings.openai_embedding_model or
+                               metadata.get('dimensions') != settings.embedding_dimensions):
+            raise VectorStoreError('Embedding 模型或维度与集合不一致，请使用新集合')
+        self.vector_store = AsyncChromaVectorStore(chroma_collection=self.collection)
+        self.index = VectorStoreIndex.from_vector_store(self.vector_store, embed_model=embed_model)
+        self.manifest_path = settings.vector_store_dir / 'versions.sqlite3'
+        with closing(sqlite3.connect(self.manifest_path)) as db, db:
+            db.execute('CREATE TABLE IF NOT EXISTS versions (collection TEXT, file_id TEXT, version TEXT, PRIMARY KEY(collection,file_id))')
+        self.lock = FileLock(str(settings.vector_store_dir / 'ingest.lock'), timeout=settings.request_timeout)
 
-    def load(self) -> None:
-        """Open or create the persistent Chroma collection."""
-        self.storage_dir.mkdir(parents=True, exist_ok=True)
-        self.client = chromadb.PersistentClient(path=str(self.storage_dir))
-        self.collection = self.client.get_or_create_collection(
-            name=self.collection_name,
-            # Cosine distance matches the retrieval score conversion below.
-            metadata={"hnsw:space": "cosine"},
-        )
-        logger.info("Loaded Chroma collection %s with %s records", self.collection_name, self.collection.count())
+    def ingest(self, nodes) -> int:
+        if self.legacy:
+            raise VectorStoreError('旧集合只供回退查询，禁止导入；请配置新的 CHROMA_COLLECTION')
+        grouped = defaultdict(list)
+        for node in nodes:
+            grouped[node.metadata['file_id']].append(node)
+        added = 0
+        # One local writer across processes; old versions remain readable during staging.
+        with self.lock:
+            for file_id, file_nodes in grouped.items():
+                version = file_nodes[0].metadata['version']
+                if any(n.metadata['version'] != version for n in file_nodes):
+                    raise ValueError('A file must contain one complete version')
+                ids = [n.node_id for n in file_nodes]
+                existing = set(self.collection.get(where={'file_id': file_id}, include=[])['ids'])
+                missing = [n for n in file_nodes if n.node_id not in existing]
+                # LlamaIndex index handles embedding once; Chroma stores serialized nodes.
+                if missing:
+                    self.index.insert_nodes(missing)
+                written = set(self.collection.get(where={'file_id': file_id}, include=[])['ids'])
+                if not set(ids) <= written:
+                    raise VectorStoreError('新版本写入不完整，保留旧版本')
+                with closing(sqlite3.connect(self.manifest_path)) as db, db:
+                    db.execute('INSERT OR REPLACE INTO versions VALUES (?,?,?)',
+                               (self.settings.chroma_collection, file_id, version))
+                added += len(missing)
+        return added
 
-    def save(self) -> None:
-        """Assert the collection exists and log its persisted record count."""
-        self._require_collection()
-        logger.info("Chroma collection %s persisted with %s records", self.collection_name, self.collection.count())
-
-    def add(self, chunks: list[DocumentChunk], embeddings: np.ndarray) -> int:
-        """Add new chunks and embeddings, skipping IDs already in Chroma."""
-        collection = self._require_collection()
-        if not chunks:
-            return 0
-        if len(chunks) != embeddings.shape[0]:
-            raise VectorStoreError("Chunk and embedding counts do not match")
-
-        existing_ids = self.existing_chunk_ids([chunk.chunk_id for chunk in chunks])
-        new_chunks: list[DocumentChunk] = []
-        new_embeddings: list[list[float]] = []
-
-        for chunk, embedding in zip(chunks, embeddings, strict=True):
-            if chunk.chunk_id in existing_ids:
-                continue
-            new_chunks.append(chunk)
-
-            # Chroma's Python API expects JSON-serializable lists, not ndarray rows.
-            new_embeddings.append(np.asarray(embedding, dtype=np.float32).tolist())
-
-        if not new_chunks:
-            return 0
-
-        collection.add(
-            ids=[chunk.chunk_id for chunk in new_chunks],
-            documents=[chunk.text for chunk in new_chunks],
-            embeddings=new_embeddings,
-            metadatas=[self._metadata_from_chunk(chunk) for chunk in new_chunks],
-        )
-        return len(new_chunks)
-
-    def search(self, query_embedding: np.ndarray, top_k: int) -> list[dict[str, Any]]:
-        """Search by query embedding and return normalized result dictionaries."""
-        collection = self._require_collection()
-        if collection.count() == 0:
-            raise VectorStoreError("Vector store is empty. Run scripts/ingest_drive.py first.")
-
-        query_vector = np.asarray(query_embedding, dtype=np.float32).tolist()
-        response = collection.query(
-            query_embeddings=[query_vector],
-            # Never ask Chroma for more results than are available.
-            n_results=min(top_k, collection.count()),
-            include=["documents", "metadatas", "distances"],
-        )
-
-        ids = response.get("ids", [[]])[0]
-        documents = response.get("documents", [[]])[0]
-        metadatas = response.get("metadatas", [[]])[0]
-        distances = response.get("distances", [[]])[0]
-
-        results: list[dict[str, Any]] = []
-        for chunk_id, document, metadata, distance in zip(ids, documents, metadatas, distances, strict=True):
-            item = dict(metadata or {})
-            item["chunk_id"] = str(item.get("chunk_id") or chunk_id)
-            item["text"] = document or ""
-            item["distance"] = float(distance)
-
-            # With cosine distance, a simple 1 - distance score is easier for
-            # callers to read while preserving Chroma's ranking.
-            item["score"] = 1.0 - float(distance)
-            item["page_number"] = self._restore_page_number(item.get("page_number"))
-            results.append(item)
-        return results
-
-    def existing_chunk_ids(self, chunk_ids: list[str] | None = None) -> set[str]:
-        """Return stored chunk IDs, optionally limited to a candidate list."""
-        collection = self._require_collection()
-        if chunk_ids is None:
-            result = collection.get(include=[])
-        elif not chunk_ids:
-            return set()
-        else:
-            result = collection.get(ids=chunk_ids, include=[])
-        return set(result.get("ids", []))
-
-    def _require_collection(self) -> Any:
-        """Return the loaded collection or raise a clear vector-store error."""
-        if self.collection is None:
-            raise VectorStoreError("Vector store is not loaded")
-        return self.collection
-
-    @staticmethod
-    def _metadata_from_chunk(chunk: DocumentChunk) -> dict[str, str | int]:
-        """Convert chunk metadata to Chroma-compatible scalar values."""
-        data = asdict(chunk)
-        return {
-            "file_name": str(data["file_name"]),
-            "file_id": str(data["file_id"]),
-            "source_link": str(data["source_link"]),
-            "page_number": int(data["page_number"] or 0),
-            "chunk_id": str(data["chunk_id"]),
-            "chunk_index": int(data["chunk_index"]),
-            "content_hash": str(data["content_hash"]),
-        }
-
-    @staticmethod
-    def _restore_page_number(value: Any) -> int | None:
-        """Convert Chroma's stored zero sentinel back to None."""
-        if value in (None, "", 0, "0"):
+    def _filters(self):
+        if self.legacy:
+            if not self.collection.count():
+                raise VectorStoreError('知识库为空，请先导入文档')
             return None
-        return int(value)
+        with closing(sqlite3.connect(self.manifest_path)) as db:
+            versions = [row[0] for row in db.execute('SELECT version FROM versions WHERE collection=?',
+                                                   (self.settings.chroma_collection,))]
+        if not versions:
+            raise VectorStoreError('知识库为空，请先导入文档')
+        return MetadataFilters(filters=[MetadataFilter(key='version', value=versions, operator=FilterOperator.IN)])
+
+    async def aretrieve(self, question: str, top_k: int):
+        filters = await asyncio.to_thread(self._filters)
+        retriever = self.index.as_retriever(similarity_top_k=top_k, filters=filters)
+        return await retriever.aretrieve(question)

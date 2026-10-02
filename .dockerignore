@@ -1,0 +1,15 @@
+.git
+.idea
+.venv
+.env
+.env.*
+!.env.example
+credentials.json
+token.json
+client_secret*.json
+data
+output
+tmp
+__pycache__
+.pytest_cache
+*.pyc
