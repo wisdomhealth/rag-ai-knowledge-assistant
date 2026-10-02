@@ -16,7 +16,7 @@ from app.utils.logger import configure_logging, get_logger
 
 
 logger = get_logger(__name__)
-ROOT_DIR = Path(__file__).resolve().parents[1]
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 @asynccontextmanager
@@ -57,13 +57,13 @@ app.include_router(chat_router)
 @app.get("/", include_in_schema=False)
 async def chat_page() -> FileResponse:
     """Serve the browser chat interface."""
-    return FileResponse(ROOT_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.get("/style.css", include_in_schema=False)
 async def stylesheet() -> FileResponse:
     """Serve the chat interface stylesheet without exposing the project folder."""
-    return FileResponse(ROOT_DIR / "style.css", media_type="text/css")
+    return FileResponse(STATIC_DIR / "style.css", media_type="text/css")
 
 
 @app.get("/health")

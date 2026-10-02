@@ -18,11 +18,13 @@ app/
   api/                 FastAPI routes and optional Basic Auth
   db/                  Chroma vector store wrapper
   services/            Drive loading, chunking, embeddings, LLM, RAG pipeline
+  static/              Browser chat interface (`index.html`, `style.css`)
   utils/               Logging and text cleaning helpers
 scripts/
   ingest_drive.py      Google Drive ingestion entrypoint
 tests/                 Unit tests
 data/chroma/           Local Chroma persistence directory
+pyproject.toml         Pytest configuration
 ```
 
 ## Requirements
@@ -115,7 +117,7 @@ Default local URL:
 http://127.0.0.1:8000
 ```
 
-The root page returns the AI Knowledge Assistant chat homepage:
+The root page serves `app/static/index.html` as the AI Knowledge Assistant chat homepage:
 
 ```text
 http://127.0.0.1:8000/
