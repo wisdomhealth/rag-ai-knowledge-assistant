@@ -1,4 +1,4 @@
-.env1
+.env
 .venv/
 credentials.json
 token.json
@@ -7,8 +7,8 @@ client_secret_*.json
 __pycache__/
 *.py[cod]
 .pytest_cache/
-data/chroma/*
-!data/chroma/.gitkeep
+/data/chroma/
+/data/vector_store/
 *_rag_*.pdf
 data/chroma_v2/
 data/*.sqlite3*
